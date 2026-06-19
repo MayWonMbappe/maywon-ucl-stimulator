@@ -2,8 +2,12 @@ import { EVENT_TEMPLATES } from '../data/eventTemplates.js';
 export function getCurrentEvent(match) { return match?.eventPlan?.[match.eventIndex] || null; }
 export function eventProgressText(match) {
   if (!match) return '';
-  if (match.eventIndex < 3) return `上半场关键抉择 ${match.eventIndex + 1}/3`;
-  if (match.eventIndex === 3) return '中场调整';
-  return `下半场关键抉择 ${match.eventIndex - 2}/4`;
+  if (match.phase === 'halftime') return '中场调整';
+  const event = getCurrentEvent(match);
+  if (!event) return '比赛结束';
+  if (event.isCritical) return `⚠ 关键时刻 · 第 ${event.minute} 分钟`;
+  const regularBefore = match.eventPlan.slice(0, match.eventIndex).filter(e => !e.isCritical).length;
+  const half = event.minute <= 45 ? '上半场' : '下半场';
+  return `${half}关键抉择 ${regularBefore + 1}/7`;
 }
 export function getAllEventTypes() { return [...new Set(EVENT_TEMPLATES.map(e => e.type))]; }

@@ -12,20 +12,48 @@ export function createSeason(userTeamId) {
     standings: createStandings(TEAMS),
     playerStatus: createPlayerStatus(userTeam),
     teamStatus: { morale: 70, tacticalFamiliarity: 60, rotationTrust: 50, medicalLoad: 40 },
-    history: [], managementHistory: [], createdAt: new Date().toISOString(), completed: false
+    history: [], managementHistory: [], createdAt: new Date().toISOString(), completed: false,
+    leagueCompleted: false,
+    knockout: null
   };
 }
+
 function generateUserOpponents(userTeamId) {
-  const others = shuffle(TEAMS.filter(t => t.id !== userTeamId));
-  const strong = others.filter(t => teamAverage(t) >= 84).slice(0, 3);
-  const mid = others.filter(t => teamAverage(t) >= 78 && teamAverage(t) < 84).slice(0, 3);
-  const weak = others.filter(t => teamAverage(t) < 78).slice(0, 2);
-  return shuffle([...strong, ...mid, ...weak]).slice(0, 8).map((t, i) => ({ round: i + 1, opponentId: t.id, home: i % 2 === 0 }));
+  const user = getTeamById(userTeamId);
+  const sorted = TEAMS
+    .filter(t => t.id !== userTeamId)
+    .sort((a, b) => teamAverage(b, true) - teamAverage(a, true));
+  const pots = [sorted.slice(0, 9), sorted.slice(9, 18), sorted.slice(18, 27), sorted.slice(27)];
+  const picked = pots.map(pot => shuffle(pot).slice(0, 2));
+  const slots = [picked[0][0], picked[2][0], picked[1][0], picked[3][0], picked[0][1], picked[2][1], picked[1][1], picked[3][1]].filter(Boolean);
+  // 让 8 轮强弱尽量均衡，而不是前强后弱；主客场交替。
+  return slots.slice(0, 8).map((t, i) => ({
+    round: i + 1,
+    opponentId: t.id,
+    home: i % 2 === 0,
+    opponentTier: opponentTier(t),
+    averageGap: Math.round((teamAverage(user, true) - teamAverage(t, true)) * 10) / 10
+  }));
 }
+
+function opponentTier(team) {
+  const avg = teamAverage(team, true);
+  if (avg >= 84) return 'strong';
+  if (avg >= 80) return 'upper_mid';
+  if (avg >= 76) return 'mid';
+  return 'underdog';
+}
+
 function createPlayerStatus(team) {
   return Object.fromEntries(team.squad.map(p => [p.name, { stamina: 100, form: 0, sharpness: 70, injuryRisk: 0, yellowCards: 0, suspended: false, minutesLastMatch: 0, startsInLast3: [] }]));
 }
-export function currentFixture(season) { return season.opponents.find(f => f.round === season.round); }
+
+export function currentFixture(season) {
+  if (!season) return null;
+  if (season.stage === 'league') return season.opponents.find(f => f.round === season.round) || null;
+  return season.knockout?.currentFixture || null;
+}
+
 export function simulateComputerRound(season, userHomeId, userAwayId) {
   const available = shuffle(TEAMS.filter(t => t.id !== userHomeId && t.id !== userAwayId).map(t => t.id));
   const pairCount = Math.min(17, Math.floor(available.length / 2));
@@ -41,6 +69,7 @@ export function simulateComputerRound(season, userHomeId, userAwayId) {
   }
   return highlights.slice(0, 5);
 }
+
 export function quickSim(home, away) {
   const h = teamAverage(home, true) + 1 + (home.hidden?.europeanTemperament || 6) * .12;
   const a = teamAverage(away, true) + (away.hidden?.europeanTemperament || 6) * .12;
@@ -49,6 +78,7 @@ export function quickSim(home, away) {
   const baseA = 1.05 - diff * .04 + Math.random() * .8;
   return { home: Math.max(0, Math.round(baseH + randomInt(-1, 1))), away: Math.max(0, Math.round(baseA + randomInt(-1, 1))) };
 }
+
 export function applyManagement(season, choice) {
   const effects = {
     recovery: { label: '恢复', stamina: 12, injury: -8, morale: 2 },
@@ -68,16 +98,165 @@ export function applyManagement(season, choice) {
   season.teamStatus.morale = Math.min(100, Math.max(0, season.teamStatus.morale + (effects.morale || 0)));
   season.teamStatus.tacticalFamiliarity = Math.min(100, Math.max(0, season.teamStatus.tacticalFamiliarity + (effects.familiarity || 0)));
   season.teamStatus.rotationTrust = Math.min(100, Math.max(0, season.teamStatus.rotationTrust + (effects.rotationTrust || 0)));
-  season.managementHistory.push({ round: season.round, choice, label: effects.label, at: new Date().toISOString() });
+  season.managementHistory.push({ round: season.round, stage: season.stage, choice, label: effects.label, at: new Date().toISOString() });
 }
-export function advanceRound(season) { season.round += 1; }
+
+export function advanceRound(season) {
+  if (season.stage === 'league' && season.round < season.maxLeagueRounds) season.round += 1;
+}
+
 export function finishLeagueIfNeeded(season) {
-  if (season.round <= season.maxLeagueRounds) return false;
+  if (season.stage !== 'league') return true;
+  const userLeagueMatches = season.history.filter(m => m.stage === 'league').length;
+  if (season.round < season.maxLeagueRounds && userLeagueMatches < season.maxLeagueRounds) return false;
+  completeLeaguePhase(season);
+  return true;
+}
+
+export function completeLeaguePhase(season) {
+  if (!season || season.leagueCompleted) return season;
   const ranked = rankedStandings(season.standings);
   const user = ranked.find(r => r.teamId === season.userTeamId);
   season.leagueRank = user?.rank;
   season.leagueZone = user?.zone;
-  if (user?.rank > 24) { season.completed = true; season.finish = 'league_eliminated'; }
-  else { season.stage = user.rank <= 8 ? 'r16' : 'playoff'; }
-  return true;
+  season.leagueCompleted = true;
+  season.round = season.maxLeagueRounds;
+
+  if (!user || user.rank > 24) {
+    season.completed = true;
+    season.finish = 'league_eliminated';
+    season.stage = 'ended';
+    season.knockout = { playoffPairs: generatePlayoffPairObjects(ranked), playoffReports: [] };
+    return season;
+  }
+
+  const playoffPairs = generatePlayoffPairObjects(ranked);
+  const userInPlayoff = user.rank >= 9 && user.rank <= 24;
+  const simulatedPlayoff = simulatePlayoffPairs(playoffPairs, season.userTeamId);
+
+  if (user.rank <= 8) {
+    const opponentId = pickBalancedOpponent(simulatedPlayoff.winnerIds, season.userTeamId, season.knockout?.usedOpponentIds || []);
+    season.stage = 'r16';
+    season.knockout = {
+      currentRound: 'r16',
+      currentFixture: makeKnockoutFixture('r16', opponentId, true),
+      playoffPairs,
+      playoffReports: simulatedPlayoff.reports,
+      remainingTeamIds: [...ranked.slice(0, 8).map(r => r.teamId), ...simulatedPlayoff.winnerIds],
+      usedOpponentIds: [],
+      bracketLog: [`联赛阶段第 ${user.rank} 名，直接进入 16 强。`, '附加赛已由系统模拟完成。']
+    };
+    return season;
+  }
+
+  const pair = playoffPairs.find(p => p.seeded.teamId === user.teamId || p.unseeded.teamId === user.teamId);
+  const opponentId = pair?.seeded.teamId === user.teamId ? pair.unseeded.teamId : pair?.seeded.teamId;
+  season.stage = 'playoff';
+  season.knockout = {
+    currentRound: 'playoff',
+    currentFixture: makeKnockoutFixture('playoff', opponentId, user.rank <= 16),
+    playoffPairs,
+    playoffReports: simulatedPlayoff.reports,
+    remainingTeamIds: [...ranked.slice(0, 8).map(r => r.teamId), ...simulatedPlayoff.winnerIds.filter(id => id !== season.userTeamId)],
+    usedOpponentIds: [],
+    bracketLog: [`联赛阶段第 ${user.rank} 名，进入淘汰赛附加赛。`]
+  };
+  return season;
+}
+
+function makeKnockoutFixture(stage, opponentId, home) {
+  return { round: stage, stage, opponentId, home, knockout: true, label: knockoutLabel(stage) };
+}
+
+function knockoutLabel(stage) {
+  return { playoff: '淘汰赛附加赛', r16: '16 强', qf: '8 强', sf: '半决赛', final: '决赛' }[stage] || stage;
+}
+
+function generatePlayoffPairObjects(ranked) {
+  const byRank = (rank) => ranked.find(r => r.rank === rank);
+  const groups = [[[9,10],[23,24]], [[11,12],[21,22]], [[13,14],[19,20]], [[15,16],[17,18]]];
+  const pairs = [];
+  for (const [seedRanks, unseedRanks] of groups) {
+    const seeded = seedRanks.map(byRank).filter(Boolean);
+    const unseeded = unseedRanks.map(byRank).filter(Boolean).reverse();
+    seeded.forEach((s, i) => {
+      if (s && unseeded[i]) pairs.push({ stage: 'playoff', seeded: s, unseeded: unseeded[i] });
+    });
+  }
+  return pairs;
+}
+
+function simulatePlayoffPairs(pairs, userTeamId) {
+  const reports = [];
+  const winnerIds = [];
+  for (const pair of pairs) {
+    if (pair.seeded.teamId === userTeamId || pair.unseeded.teamId === userTeamId) continue;
+    const seededTeam = getTeamById(pair.seeded.teamId);
+    const unseededTeam = getTeamById(pair.unseeded.teamId);
+    const leg1 = quickSim(unseededTeam, seededTeam);
+    const leg2 = quickSim(seededTeam, unseededTeam);
+    const seededAgg = leg1.away + leg2.home;
+    const unseededAgg = leg1.home + leg2.away;
+    let winner = seededAgg >= unseededAgg ? seededTeam : unseededTeam;
+    if (seededAgg === unseededAgg && Math.random() < .42) winner = unseededTeam;
+    winnerIds.push(winner.id);
+    reports.push(`${seededTeam.zhName || seededTeam.name} 总比分 ${seededAgg}-${unseededAgg} ${unseededTeam.zhName || unseededTeam.name}，${winner.zhName || winner.name} 晋级。`);
+  }
+  return { reports, winnerIds };
+}
+
+function pickBalancedOpponent(candidateIds, userTeamId, usedIds = []) {
+  const user = getTeamById(userTeamId);
+  const candidates = candidateIds
+    .filter(id => id && id !== userTeamId && !usedIds.includes(id))
+    .map(id => getTeamById(id))
+    .filter(Boolean);
+  if (!candidates.length) {
+    return shuffle(TEAMS.filter(t => t.id !== userTeamId && !usedIds.includes(t.id))).at(0)?.id;
+  }
+  const userAvg = teamAverage(user, true);
+  const sorted = candidates.sort((a, b) => Math.abs(teamAverage(a, true) - userAvg) - Math.abs(teamAverage(b, true) - userAvg));
+  return shuffle(sorted.slice(0, Math.min(4, sorted.length)))[0].id;
+}
+
+export function processKnockoutResult(season, match) {
+  const userWon = match.knockoutWinner ? match.knockoutWinner === 'user' : match.score.user > match.score.opponent;
+  const stage = match.stage;
+  const opp = getTeamById(match.opponentId);
+  if (!season.knockout) season.knockout = { usedOpponentIds: [], bracketLog: [], remainingTeamIds: [] };
+  season.knockout.usedOpponentIds = season.knockout.usedOpponentIds || [];
+  season.knockout.bracketLog = season.knockout.bracketLog || [];
+  season.knockout.usedOpponentIds.push(match.opponentId);
+  season.knockout.bracketLog.push(`${knockoutLabel(stage)}：${season.userTeamZhName || season.userTeamName} ${match.score.user}-${match.score.opponent} ${opp.zhName || opp.name}，${userWon ? '晋级' : '出局'}。${match.penalty ? `点球 ${match.penalty.user}-${match.penalty.opponent}` : ''}`);
+
+  if (!userWon) {
+    season.completed = true;
+    season.finish = `${stage}_eliminated`;
+    season.stage = 'ended';
+    season.knockout.currentFixture = null;
+    return season;
+  }
+
+  if (stage === 'final') {
+    season.completed = true;
+    season.finish = 'champion';
+    season.stage = 'champion';
+    season.knockout.currentFixture = null;
+    season.knockout.bracketLog.push('你赢得了欧冠冠军。');
+    return season;
+  }
+
+  const next = nextStage(stage);
+  let candidates = season.knockout.remainingTeamIds || [];
+  if (!candidates.length) candidates = TEAMS.map(t => t.id).filter(id => id !== season.userTeamId);
+  const nextOpponentId = pickBalancedOpponent(candidates, season.userTeamId, season.knockout.usedOpponentIds);
+  season.stage = next;
+  season.knockout.currentRound = next;
+  season.knockout.currentFixture = makeKnockoutFixture(next, nextOpponentId, next !== 'final');
+  season.knockout.remainingTeamIds = candidates.filter(id => id !== nextOpponentId && id !== match.opponentId);
+  return season;
+}
+
+function nextStage(stage) {
+  return { playoff: 'r16', r16: 'qf', qf: 'sf', sf: 'final' }[stage] || 'final';
 }

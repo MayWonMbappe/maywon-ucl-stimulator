@@ -121,3 +121,72 @@ export const EVENT_TEMPLATES = [
     ]
   }
 ];
+
+
+export const CRITICAL_MOMENT_TEMPLATES = [
+  {
+    id: 'CRITICAL_ONE_ON_ONE_FOR',
+    isCritical: true,
+    type: '关键时刻｜我方单刀',
+    criticalKind: 'one_on_one_for',
+    title: '我方前锋获得单刀机会',
+    desc: '一次纵向传球打穿防线，前锋已经面对门将。这个选择会直接影响比分。',
+    options: [
+      { text: '冷静推远角，优先把握确定性。', effects: { chanceQuality: 4, instantGoalChance: 14 }, tags: ['elite_finisher','composure','big_game'] },
+      { text: '横传给跟进队友，追求空门机会。', effects: { chanceCreation: 3, chanceQuality: 3, instantGoalChance: 11, counterRisk: 1 }, tags: ['creator','final_ball','balanced'] },
+      { text: '挑射或爆射，赌门将站位。', effects: { chanceQuality: 5, instantGoalChance: 16, counterRisk: 2 }, tags: ['flair','risk','big_game'] }
+    ]
+  },
+  {
+    id: 'CRITICAL_ONE_ON_ONE_AGAINST',
+    isCritical: true,
+    type: '关键时刻｜对方单刀',
+    criticalKind: 'one_on_one_against',
+    title: '对方前锋获得单刀机会',
+    desc: '你的防线被打穿，对方前锋已经直面门将。处理方式会直接决定是否丢球。',
+    options: [
+      { text: '门将果断出击，压缩射门角度。', effects: { defensiveStability: 3, instantConcedeChance: 9 }, tags: ['elite_shot_stopper','sweeper_keeper','big_game'] },
+      { text: '中卫回追封内线，迫使对手打小角度。', effects: { defensiveStability: 4, instantConcedeChance: 10, staminaCost: 1 }, tags: ['pace_defender','duel_winner','safe'] },
+      { text: '战术犯规破坏机会，承担任意球和吃牌风险。', effects: { defensiveStability: 2, foulRisk: 6, instantConcedeChance: 6, counterRisk: 1 }, tags: ['aggressive_defense','risk'] }
+    ]
+  },
+  {
+    id: 'CRITICAL_PENALTY_FOR',
+    isCritical: true,
+    type: '关键时刻｜我方点球',
+    criticalKind: 'penalty_for',
+    title: '我方获得点球',
+    desc: '裁判指向十二码点。点球主罚方式会被终结能力、大场面和心理属性影响。',
+    options: [
+      { text: '让头号射手主罚，选择稳妥角度。', effects: { chanceQuality: 5, instantGoalChance: 18 }, tags: ['elite_finisher','finisher','big_game'] },
+      { text: '让心理最稳的球员主罚，等待门将先动。', effects: { chanceQuality: 4, instantGoalChance: 16 }, tags: ['composure','mentality','big_game'] },
+      { text: '选择勺子点球或非常规节奏，追求心理压制。', effects: { chanceQuality: 6, instantGoalChance: 17, counterRisk: 1 }, tags: ['flair','risk','big_game'] }
+    ]
+  },
+  {
+    id: 'CRITICAL_PENALTY_AGAINST',
+    isCritical: true,
+    type: '关键时刻｜对方点球',
+    criticalKind: 'penalty_against',
+    title: '对方获得点球',
+    desc: '对手站上点球点。你的门将策略和门线能力会决定这次危机。',
+    options: [
+      { text: '门将研究习惯后提前判断方向。', effects: { defensiveStability: 3, instantConcedeChance: 10 }, tags: ['elite_shot_stopper','big_game'] },
+      { text: '门将坚持到最后一刻再扑，避免被假动作骗过。', effects: { defensiveStability: 2, instantConcedeChance: 11 }, tags: ['shot_stopper','composure','balanced'] },
+      { text: '尝试心理干扰，制造对方主罚犹豫。', effects: { defensiveStability: 1, foulRisk: 1, instantConcedeChance: 9 }, tags: ['mentality','risk'] }
+    ]
+  },
+  {
+    id: 'CRITICAL_KEY_INJURY',
+    isCritical: true,
+    type: '关键时刻｜核心伤退',
+    criticalKind: 'key_injury',
+    title: '我方重要球员疑似伤退',
+    desc: '一名关键球员无法继续坚持。你必须决定如何换人或变阵。',
+    options: [
+      { text: '对位换人，尽量保持原战术结构。', effects: { defensiveStability: 2, control: 1, staminaCost: -1 }, tags: ['substitution','safe'] },
+      { text: '借机变阵，补强中场控制。', effects: { control: 3, chanceCreation: -1, defensiveStability: 1 }, tags: ['tempo_controller','balanced'] },
+      { text: '换上进攻球员，接受结构风险继续抢分。', effects: { chanceCreation: 3, instantGoalChance: 5, counterRisk: 3, defensiveStability: -1 }, tags: ['risk','mobile_forward'] }
+    ]
+  }
+];

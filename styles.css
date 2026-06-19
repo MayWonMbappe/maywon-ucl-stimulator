@@ -109,3 +109,30 @@ select, input {
   .scoreboard { grid-template-columns: 1fr; }
   table { min-width: 560px; }
 }
+.choice-text { display: block; font-weight: 700; }
+.choice-effects { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.choice-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tooltip-badge { cursor: help; }
+.timeline-item .choice-tags { display: inline-flex; margin-top: 8px; }
+.goal-line{display:inline-block;margin-top:.35rem;color:#f7d774;font-weight:700;line-height:1.6}.timeline-item .goal-line{color:#ffe48a}.section-title button{white-space:nowrap}
+
+
+/* Critical moment: visually stronger than the seven normal decisions */
+.critical-moment{
+  border:1px solid rgba(255,213,79,.95)!important;
+  background:linear-gradient(135deg, rgba(255,213,79,.18), rgba(255,255,255,.055))!important;
+  box-shadow:0 0 0 1px rgba(255,213,79,.22), 0 18px 46px rgba(255,184,0,.12);
+  position:relative;
+}
+.critical-moment:before{
+  content:'关键时刻';
+  position:absolute; right:18px; top:-12px;
+  padding:4px 10px; border-radius:999px;
+  background:#f7d774; color:#16120b; font-weight:900; font-size:.78rem;
+  box-shadow:0 10px 30px rgba(0,0,0,.22);
+}
+.critical-note{color:#ffe99a;font-weight:800;margin:.55rem 0 0;}
+.option-list button.critical-choice{border-color:rgba(255,213,79,.7);background:rgba(255,213,79,.10)}
+.option-list button.critical-choice:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(255,213,79,.12)}
+.timeline-critical{border-color:rgba(255,213,79,.7)!important;background:rgba(255,213,79,.09)!important;}
+.timeline-critical strong{color:#ffe48a;}
