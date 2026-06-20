@@ -97,7 +97,7 @@ function renderKnockoutHub(s, team) {
   const reports = s.knockout?.playoffReports?.length ? `<div class="card"><h3>附加赛战报</h3><div class="timeline">${s.knockout.playoffReports.map(x=>`<div class="timeline-item">${x}</div>`).join('')}</div></div>` : '';
   const log = s.knockout?.bracketLog?.length ? `<div class="card"><h3>你的淘汰赛路径</h3><div class="timeline">${s.knockout.bracketLog.map(x=>`<div class="timeline-item">${x}</div>`).join('')}</div></div>` : '';
   set(html`<section class="hero"><p class="eyebrow">Knockout Stage</p><h2>${team.zhName || team.name} · ${stageName(s.stage)}</h2>
-  <p>${fixture ? `下一场：${fixture.home ? '主场' : '客场/中立'} vs ${opponent.zhName || opponent.name}` : describeUserPath(s)}</p>
+  <p>${fixture ? `下一场：${fixture.home ? '主场' : '客场/中立'} vs ${opponent.zhName || opponent.name}${fixture.totalLegs === 2 ? ` · 第${fixture.leg}回合${fixture.aggregate ? ` · 总比分 ${fixture.aggregate.user}-${fixture.aggregate.opponent}` : ''}` : ''}` : describeUserPath(s)}</p>
   <div class="actions"><button class="primary" data-go="/prematch">进入${stageName(s.stage)}赛前部署</button><button data-go="/knockout">查看抽签路径</button><button data-go="/history">历史记录</button></div></section>${reports}${log}`);
 }
 
@@ -129,9 +129,14 @@ function renderPrematch() {
   if (!ensureSeason()) return;
   const s = state.season, f = currentFixture(s); if (!f) return renderSeason();
   const team = getTeamById(s.userTeamId), opp = getTeamById(f.opponentId);
-  const tactics = state.selectedTactics || DEFAULT_TACTICS;
+  const tactics = { ...DEFAULT_TACTICS, ...(state.selectedTactics || {}) };
   const fields = tacticForm(tactics);
-  set(html`<section class="card"><h2>赛前部署 · ${stageName(s.stage)}</h2><p class="meta">${team.zhName} ${f.home?'主场':'客场/中立'} 对阵 ${opp.zhName || opp.name}。对手首发均分 ${teamAverage(opp,true)}。</p>${formationPitch(team, tactics.formation)}<div class="form-grid">${fields}</div><div class="actions"><button class="primary" id="confirm-tactics">确认并进入比赛</button><button data-go="/season">返回</button></div></section>`);
+  const legInfo = f.totalLegs === 2 ? ` · 第${f.leg}回合${f.aggregate ? ` · 总比分 ${f.aggregate.user}-${f.aggregate.opponent}` : ''}` : '';
+  set(html`<section class="card"><h2>赛前部署 · ${stageName(s.stage)}${legInfo}</h2><p class="meta">${team.zhName} ${f.home?'主场':'客场/中立'} 对阵 ${opp.zhName || opp.name}。对手首发均分 ${teamAverage(opp,true)}。</p><div id="formation-preview">${formationPitch(team, tactics.formation)}</div><div class="form-grid">${fields}</div><div class="actions"><button class="primary" id="confirm-tactics">确认并进入比赛</button><button data-go="/season">返回</button></div></section>`);
+  const formationSelect = document.querySelector('select[name="formation"]');
+  formationSelect?.addEventListener('change', () => {
+    document.getElementById('formation-preview').innerHTML = formationPitch(team, formationSelect.value);
+  });
   document.getElementById('confirm-tactics').addEventListener('click', () => {
     const form = document.querySelector('#tactic-form');
     const data = Object.fromEntries(new FormData(form).entries());
@@ -146,25 +151,77 @@ function tacticForm(tactics) {
 }
 
 function formationPitch(team, formation) {
-  const starters = team.squad.filter(p=>p.isStarter).slice(0,11);
-  const coords = [[50,90],[20,72],[40,72],[60,72],[80,72],[30,52],[50,52],[70,52],[20,30],[50,20],[80,30]];
-  return `<div class="pitch">${starters.map((p,i)=>`<div class="player-dot" style="left:${coords[i][0]}%;top:${coords[i][1]}%">${p.zhName?.split('·').pop() || p.name.split(' ').pop()}<br>${p.position}</div>`).join('')}</div><p class="small">阵型可视化为简化布局，后续可升级拖拽战术板。</p>`;
+  const starters = team.squad.filter(p=>p.isStarter);
+  const assigned = assignFormationSlots(starters, formation);
+  return `<div class="pitch formation-${formation}">${assigned.map(({p, x, y, role})=>`<div class="player-dot" style="left:${x}%;top:${y}%"><strong>${shortPlayerName(p)}</strong><br><span>${role}</span></div>`).join('')}</div><p class="small">阵型图会随阵型切换自动重排；球员优先按实际位置落位，避免边锋/中锋错位。</p>`;
+}
+
+function shortPlayerName(p) { return p.zhName?.split('·').pop() || p.name.split(' ').pop(); }
+
+const FORMATION_SLOTS = {
+  F433: [
+    ['GK',50,91,/GK/], ['LB',18,73,/LB|LWB/], ['LCB',38,73,/CB/], ['RCB',62,73,/CB/], ['RB',82,73,/RB|RWB/],
+    ['DM',50,56,/DM|CM/], ['LCM',34,47,/CM|AM|DM/], ['RCM',66,47,/CM|AM|DM/], ['LW',20,25,/LW|LM|RW|AM/], ['ST',50,18,/ST|CF/], ['RW',80,25,/RW|RM|LW|AM/]
+  ],
+  F4231: [
+    ['GK',50,91,/GK/], ['LB',18,73,/LB|LWB/], ['LCB',38,73,/CB/], ['RCB',62,73,/CB/], ['RB',82,73,/RB|RWB/],
+    ['LDM',40,57,/DM|CM/], ['RDM',60,57,/DM|CM/], ['LW',20,35,/LW|LM|RW/], ['AM',50,34,/AM|CM|RW|LW/], ['RW',80,35,/RW|RM|LW/], ['ST',50,18,/ST|CF/]
+  ],
+  F343: [
+    ['GK',50,91,/GK/], ['LCB',30,73,/CB|LB/], ['CB',50,75,/CB/], ['RCB',70,73,/CB|RB/], ['LWB',16,53,/LB|LWB|LW/], ['LCM',40,52,/CM|DM/], ['RCM',60,52,/CM|DM/], ['RWB',84,53,/RB|RWB|RW/], ['LW',22,25,/LW|AM|RW/], ['ST',50,18,/ST|CF/], ['RW',78,25,/RW|AM|LW/]
+  ],
+  F352: [
+    ['GK',50,91,/GK/], ['LCB',30,73,/CB|LB/], ['CB',50,75,/CB/], ['RCB',70,73,/CB|RB/], ['LWB',16,52,/LB|LWB|LW/], ['LCM',38,50,/CM|DM/], ['DM',50,57,/DM|CM/], ['RCM',62,50,/CM|AM|DM/], ['RWB',84,52,/RB|RWB|RW/], ['LST',42,19,/ST|CF|LW/], ['RST',58,19,/ST|CF|RW/]
+  ],
+  F442: [
+    ['GK',50,91,/GK/], ['LB',18,73,/LB|LWB/], ['LCB',38,73,/CB/], ['RCB',62,73,/CB/], ['RB',82,73,/RB|RWB/], ['LM',20,48,/LW|LM|LB/], ['LCM',42,52,/CM|DM/], ['RCM',58,52,/CM|DM|AM/], ['RM',80,48,/RW|RM|RB/], ['LST',42,20,/ST|CF|LW/], ['RST',58,20,/ST|CF|RW/]
+  ],
+  F532: [
+    ['GK',50,91,/GK/], ['LWB',14,72,/LB|LWB|LW/], ['LCB',34,75,/CB|LB/], ['CB',50,76,/CB/], ['RCB',66,75,/CB|RB/], ['RWB',86,72,/RB|RWB|RW/], ['LCM',38,52,/CM|DM/], ['DM',50,57,/DM|CM/], ['RCM',62,52,/CM|AM|DM/], ['LST',42,21,/ST|CF|LW/], ['RST',58,21,/ST|CF|RW/]
+  ]
+};
+
+function assignFormationSlots(players, formation) {
+  const slots = FORMATION_SLOTS[formation] || FORMATION_SLOTS.F433;
+  const remaining = [...players];
+  const out = [];
+  for (const [role, x, y, regex] of slots) {
+    let idx = remaining.findIndex(p => regex.test(p.position || ''));
+    if (idx < 0 && role.includes('ST')) idx = remaining.findIndex(p => /LW|RW|AM/.test(p.position || ''));
+    if (idx < 0 && /LW|LM|LWB/.test(role)) idx = remaining.findIndex(p => /LB|LW|CM/.test(p.position || ''));
+    if (idx < 0 && /RW|RM|RWB/.test(role)) idx = remaining.findIndex(p => /RB|RW|CM/.test(p.position || ''));
+    if (idx < 0) idx = 0;
+    const [p] = remaining.splice(idx, 1);
+    if (p) out.push({ p, x, y, role });
+  }
+  return out;
 }
 
 function renderMatch() {
   const m = state.currentMatch; if (!m) return go('/season');
+  if (m.pendingResult) return renderEventResult(m);
   if (m.phase === 'halftime') return go('/halftime');
   if (m.phase === 'fulltime') { finalizeAndStore(); return go('/postmatch'); }
   const event = getCurrentEvent(m);
   const user = getTeamById(m.userTeamId), opp = getTeamById(m.opponentId);
-  set(html`<section class="card"><div class="scoreboard"><h3>${user.zhName}</h3><div class="score">${m.score.user} - ${m.score.opponent}</div><h3>${opp.zhName || opp.name}</h3></div><p class="meta">${eventProgressText(m)} · 预计 xG ${m.xg.user.toFixed(2)}-${m.xg.opponent.toFixed(2)}</p>
+  const legInfo = m.fixture?.totalLegs === 2 ? ` · 第${m.fixture.leg}回合${m.fixture.aggregate ? ` · 总比分 ${m.fixture.aggregate.user}-${m.fixture.aggregate.opponent}` : ''}` : '';
+  set(html`<section class="card"><div class="scoreboard"><h3>${user.zhName}</h3><div class="score">${m.score.user} - ${m.score.opponent}</div><h3>${opp.zhName || opp.name}</h3></div><p class="meta">${eventProgressText(m)}${legInfo} · 预计 xG ${m.xg.user.toFixed(2)}-${m.xg.opponent.toFixed(2)}</p>
   <div class="match-event ${event.isCritical ? 'critical-moment' : ''}"><p class="eyebrow">${event.isCritical ? '⚠ 关键时刻' : `${event.minute}' · ${event.type}`}</p><h2>${event.title}</h2><p class="meta">${event.desc}</p>${event.isCritical ? '<p class="critical-note">这次选择可能直接产生进球、点球扑救、伤退调整或比分转折。</p>' : ''}<div class="option-list">${event.options.map((o,i)=>choiceButton(o,i,event.isCritical)).join('')}</div></div>
-  <div class="section-title"><h2>比赛记录</h2></div><div class="timeline">${m.timeline.map(timelineItem).join('')}</div></section>`);
+  <div class="section-title"><h2>已完成事件</h2></div><div class="timeline">${m.timeline.map(timelineItem).join('') || '<p class="meta">暂无。</p>'}</div></section>`);
   document.querySelectorAll('[data-choice]').forEach(btn => btn.addEventListener('click', () => { applyEventChoice(m, Number(btn.dataset.choice)); saveState(); render(); }));
 }
 
-function traitBadge(id) { return `<span class="badge tooltip-badge" title="${escapeAttr(traitTooltip(id))}" aria-label="${escapeAttr(traitTooltip(id))}">${traitLabel(id)}</span>`; }
-function optionTagBadge(id) { return `<span class="badge tooltip-badge" title="${escapeAttr(optionTagTooltip(id))}" aria-label="${escapeAttr(optionTagTooltip(id))}">${optionTagLabel(id)}</span>`; }
+function renderEventResult(m) {
+  const r = m.pendingResult;
+  const user = getTeamById(m.userTeamId), opp = getTeamById(m.opponentId);
+  set(html`<section class="card"><div class="scoreboard"><h3>${user.zhName}</h3><div class="score">${m.score.user} - ${m.score.opponent}</div><h3>${opp.zhName || opp.name}</h3></div>
+  <div class="match-event result-panel ${r.isCritical ? 'critical-moment' : ''}"><p class="eyebrow">${r.isCritical ? '⚠ 关键时刻结果' : `${r.minute}' · 事件结果`}</p><h2>${r.title}</h2><p class="meta">你的选择：${r.optionText}</p><div class="result-text">${r.resultText}</div>${r.goals?.length ? `<p class="goal-line">${goalList(r.goals)}</p>` : ''}${r.opponentAdjustment ? `<p class="opponent-adjustment">对手变化：${r.opponentAdjustment}</p>` : ''}<div class="actions"><button class="primary" id="continue-event">继续比赛</button></div></div>
+  <div class="section-title"><h2>已完成事件</h2></div><div class="timeline">${m.timeline.map(timelineItem).join('')}</div></section>`);
+  document.getElementById('continue-event').addEventListener('click', () => { m.pendingResult = null; saveState(); render(); });
+}
+
+function traitBadge(id) { return `<span class="badge tooltip-badge" data-tooltip="${escapeAttr(traitTooltip(id))}" aria-label="${escapeAttr(traitTooltip(id))}">${traitLabel(id)}</span>`; }
+function optionTagBadge(id) { return `<span class="badge tooltip-badge" data-tooltip="${escapeAttr(optionTagTooltip(id))}" aria-label="${escapeAttr(optionTagTooltip(id))}">${optionTagLabel(id)}</span>`; }
 function choiceButton(option, i, isCritical = false) {
   const tags = (option.tags || []).map(optionTagBadge).join('');
   const tip = `数值影响：${effectSummary(option.effects)}${option.tags?.length ? '｜标签增益：' + option.tags.map(optionTagTooltip).join('；') : ''}`;

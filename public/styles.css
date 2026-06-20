@@ -136,3 +136,38 @@ select, input {
 .option-list button.critical-choice:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(255,213,79,.12)}
 .timeline-critical{border-color:rgba(255,213,79,.7)!important;background:rgba(255,213,79,.09)!important;}
 .timeline-critical strong{color:#ffe48a;}
+
+/* Formation and live event result improvements */
+#formation-preview { margin: 12px 0 16px; }
+.pitch.formation-F433 .player-dot,
+.pitch.formation-F4231 .player-dot,
+.pitch.formation-F343 .player-dot,
+.pitch.formation-F352 .player-dot,
+.pitch.formation-F442 .player-dot,
+.pitch.formation-F532 .player-dot { transition: left .22s ease, top .22s ease, transform .18s ease; }
+.player-dot strong { color: #fff; font-size: 11px; }
+.player-dot span { color: rgba(255,255,255,.75); font-size: 10px; }
+.result-panel { border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); }
+.result-text { margin: 12px 0; padding: 14px; border-radius: 16px; background: rgba(0,0,0,.23); border: 1px solid rgba(255,255,255,.12); line-height: 1.7; }
+.opponent-adjustment { margin-top: 10px; padding: 10px 12px; border-radius: 14px; border: 1px dashed rgba(255,213,79,.35); color: #ffe9a8; background: rgba(255,213,79,.07); }
+.tooltip-badge { position: relative; cursor: help; }
+.tooltip-badge::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%; bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 220px; max-width: 320px;
+  white-space: normal; line-height: 1.45;
+  padding: 10px 12px; border-radius: 12px;
+  background: rgba(3, 9, 21, .96);
+  color: #f7f4e8;
+  border: 1px solid rgba(255,213,79,.45);
+  box-shadow: 0 16px 36px rgba(0,0,0,.35);
+  opacity: 0; pointer-events: none;
+  transition: opacity .14s ease, transform .14s ease;
+  z-index: 50;
+}
+.tooltip-badge:hover::after, .tooltip-badge:focus::after { opacity: 1; transform: translateX(-50%) translateY(-2px); }
+.option-list .tooltip-badge::after { left: 0; transform: none; bottom: calc(100% + 6px); }
+.option-list .tooltip-badge:hover::after { transform: translateY(-2px); }
+@media (max-width: 680px) { .tooltip-badge::after { min-width: 190px; max-width: 260px; } }

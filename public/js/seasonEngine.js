@@ -146,7 +146,7 @@ export function completeLeaguePhase(season) {
     season.stage = 'r16';
     season.knockout = {
       currentRound: 'r16',
-      currentFixture: makeKnockoutFixture('r16', opponentId, true),
+      currentFixture: makeKnockoutFixture('r16', opponentId, false, 1),
       playoffPairs,
       playoffReports: simulatedPlayoff.reports,
       remainingTeamIds: [...ranked.slice(0, 8).map(r => r.teamId), ...simulatedPlayoff.winnerIds],
@@ -161,7 +161,7 @@ export function completeLeaguePhase(season) {
   season.stage = 'playoff';
   season.knockout = {
     currentRound: 'playoff',
-    currentFixture: makeKnockoutFixture('playoff', opponentId, user.rank <= 16),
+    currentFixture: makeKnockoutFixture('playoff', opponentId, user.rank > 16, 1),
     playoffPairs,
     playoffReports: simulatedPlayoff.reports,
     remainingTeamIds: [...ranked.slice(0, 8).map(r => r.teamId), ...simulatedPlayoff.winnerIds.filter(id => id !== season.userTeamId)],
@@ -171,8 +171,9 @@ export function completeLeaguePhase(season) {
   return season;
 }
 
-function makeKnockoutFixture(stage, opponentId, home) {
-  return { round: stage, stage, opponentId, home, knockout: true, label: knockoutLabel(stage) };
+function makeKnockoutFixture(stage, opponentId, home, leg = 1, aggregate = null) {
+  const totalLegs = stage === 'final' ? 1 : 2;
+  return { round: stage, stage, opponentId, home, knockout: true, label: knockoutLabel(stage), leg, totalLegs, aggregate };
 }
 
 function knockoutLabel(stage) {
@@ -227,14 +228,58 @@ function pickBalancedOpponent(candidateIds, userTeamId, usedIds = []) {
 }
 
 export function processKnockoutResult(season, match) {
-  const userWon = match.knockoutWinner ? match.knockoutWinner === 'user' : match.score.user > match.score.opponent;
   const stage = match.stage;
+  const fixture = match.fixture || {};
   const opp = getTeamById(match.opponentId);
   if (!season.knockout) season.knockout = { usedOpponentIds: [], bracketLog: [], remainingTeamIds: [] };
   season.knockout.usedOpponentIds = season.knockout.usedOpponentIds || [];
   season.knockout.bracketLog = season.knockout.bracketLog || [];
-  season.knockout.usedOpponentIds.push(match.opponentId);
-  season.knockout.bracketLog.push(`${knockoutLabel(stage)}：${season.userTeamZhName || season.userTeamName} ${match.score.user}-${match.score.opponent} ${opp.zhName || opp.name}，${userWon ? '晋级' : '出局'}。${match.penalty ? `点球 ${match.penalty.user}-${match.penalty.opponent}` : ''}`);
+
+  const isFinal = stage === 'final' || fixture.totalLegs === 1;
+  if (!isFinal && fixture.leg === 1) {
+    const aggregate = {
+      user: match.score.user,
+      opponent: match.score.opponent,
+      leg1: { user: match.score.user, opponent: match.score.opponent, home: fixture.home }
+    };
+    season.knockout.bracketLog.push(`${knockoutLabel(stage)}首回合：${season.userTeamZhName || season.userTeamName} ${match.score.user}-${match.score.opponent} ${opp.zhName || opp.name}，总比分暂为 ${aggregate.user}-${aggregate.opponent}。`);
+    season.knockout.currentFixture = makeKnockoutFixture(stage, match.opponentId, !fixture.home, 2, aggregate);
+    return season;
+  }
+
+  let userWon = false;
+  let logSuffix = '';
+  if (!isFinal && fixture.leg === 2) {
+    const before = fixture.aggregate || { user: 0, opponent: 0 };
+    const aggregate = {
+      user: before.user + match.score.user,
+      opponent: before.opponent + match.score.opponent,
+      leg1: before.leg1 || null,
+      leg2: { user: match.score.user, opponent: match.score.opponent, home: fixture.home }
+    };
+    if (aggregate.user !== aggregate.opponent) {
+      userWon = aggregate.user > aggregate.opponent;
+      match.knockoutWinner = userWon ? 'user' : 'opponent';
+      logSuffix = `总比分 ${aggregate.user}-${aggregate.opponent}`;
+    } else {
+      const tie = resolveAggregateTie(season, match, opp);
+      userWon = tie.userWon;
+      logSuffix = `总比分 ${aggregate.user}-${aggregate.opponent}，${tie.text}`;
+    }
+    match.aggregate = aggregate;
+    season.knockout.bracketLog.push(`${knockoutLabel(stage)}次回合：${season.userTeamZhName || season.userTeamName} ${match.score.user}-${match.score.opponent} ${opp.zhName || opp.name}，${logSuffix}，${userWon ? '晋级' : '出局'}。`);
+  } else {
+    if (match.score.user !== match.score.opponent) {
+      userWon = match.score.user > match.score.opponent;
+      match.knockoutWinner = userWon ? 'user' : 'opponent';
+      logSuffix = '决赛常规时间决出胜负';
+    } else {
+      const tie = resolveAggregateTie(season, match, opp, true);
+      userWon = tie.userWon;
+      logSuffix = tie.text;
+    }
+    season.knockout.bracketLog.push(`${knockoutLabel(stage)}：${season.userTeamZhName || season.userTeamName} ${match.score.user}-${match.score.opponent} ${opp.zhName || opp.name}，${logSuffix}，${userWon ? '夺冠' : '出局'}。`);
+  }
 
   if (!userWon) {
     season.completed = true;
@@ -256,12 +301,35 @@ export function processKnockoutResult(season, match) {
   const next = nextStage(stage);
   let candidates = season.knockout.remainingTeamIds || [];
   if (!candidates.length) candidates = TEAMS.map(t => t.id).filter(id => id !== season.userTeamId);
+  season.knockout.usedOpponentIds.push(match.opponentId);
   const nextOpponentId = pickBalancedOpponent(candidates, season.userTeamId, season.knockout.usedOpponentIds);
   season.stage = next;
   season.knockout.currentRound = next;
-  season.knockout.currentFixture = makeKnockoutFixture(next, nextOpponentId, next !== 'final');
+  season.knockout.currentFixture = makeKnockoutFixture(next, nextOpponentId, next === 'final', 1);
   season.knockout.remainingTeamIds = candidates.filter(id => id !== nextOpponentId && id !== match.opponentId);
   return season;
+}
+
+function resolveAggregateTie(season, match, opp, final = false) {
+  const userTeam = getTeamById(season.userTeamId);
+  const userPower = teamAverage(userTeam, true) + (userTeam.hidden?.europeanTemperament || 6) * .4;
+  const oppPower = teamAverage(opp, true) + (opp.hidden?.europeanTemperament || 6) * .4;
+  const extraChance = Math.max(.18, Math.min(.42, .30 + (userPower - oppPower) * .018));
+  if (Math.random() < extraChance) {
+    match.knockoutWinner = 'user';
+    match.extraTime = { winner: 'user' };
+    return { userWon: true, text: `${final ? '决赛' : '两回合'}战平后加时赛取胜` };
+  }
+  if (Math.random() > .72) {
+    match.knockoutWinner = 'opponent';
+    match.extraTime = { winner: 'opponent' };
+    return { userWon: false, text: `${final ? '决赛' : '两回合'}战平后加时赛失利` };
+  }
+  const userPenalty = Math.random() + (userPower - oppPower) * .015;
+  const userWon = userPenalty >= .46;
+  match.knockoutWinner = userWon ? 'user' : 'opponent';
+  match.penalty = { user: userWon ? randomInt(4, 6) : randomInt(2, 4), opponent: userWon ? randomInt(2, 4) : randomInt(4, 6), winner: match.knockoutWinner };
+  return { userWon, text: `加时仍平，点球大战 ${match.penalty.user}-${match.penalty.opponent}` };
 }
 
 function nextStage(stage) {

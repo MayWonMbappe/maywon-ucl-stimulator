@@ -25,7 +25,8 @@ export function createMatch(season, fixture, tactics) {
     halftime: null,
     eventIndex: 0,
     phase: 'first_half',
-    eventPlan: buildEventPlan(),
+    eventPlan: buildEventPlan(userTeam, opponent),
+    pendingResult: null,
     halftimeDone: false,
     injuries: [],
     choices: [],
@@ -37,14 +38,85 @@ export function createMatch(season, fixture, tactics) {
   };
 }
 
-function buildEventPlan() {
-  const shuffled = [...EVENT_TEMPLATES].sort(() => Math.random() - .5).slice(0, 7);
-  const regularMinutes = [12, 27, 42, 55, 66, 78, 86];
-  const regularEvents = shuffled.map((e, i) => ({ ...e, minute: regularMinutes[i], isCritical: false }));
+function buildEventPlan(userTeam, opponent) {
+  const firstHalfPool = EVENT_TEMPLATES.filter(e => e.id !== 'FATIGUE_DROP');
+  const secondHalfPool = EVENT_TEMPLATES;
+  const firstHalf = shuffleLocal(firstHalfPool).slice(0, 3).map((e, i) => enrichEvent(e, [12, 27, 42][i], false, userTeam, opponent));
+  const secondHalf = shuffleLocal(secondHalfPool).slice(0, 4).map((e, i) => {
+    const minute = e.id === 'FATIGUE_DROP' ? sample([58, 64, 72, 82]) : [55, 66, 78, 86][i];
+    return enrichEvent(e, minute, false, userTeam, opponent);
+  });
   const criticalTemplate = sample(CRITICAL_MOMENT_TEMPLATES);
   const criticalMinute = sample([18, 34, 51, 73, 88]);
-  const criticalEvent = { ...criticalTemplate, minute: criticalMinute, isCritical: true };
-  return [...regularEvents, criticalEvent].sort((a, b) => a.minute - b.minute);
+  const criticalEvent = enrichEvent(criticalTemplate, criticalMinute, true, userTeam, opponent);
+  return [...firstHalf, ...secondHalf, criticalEvent].sort((a, b) => a.minute - b.minute);
+}
+
+function shuffleLocal(arr) { return [...arr].sort(() => Math.random() - .5); }
+
+function enrichEvent(template, minute, isCritical, userTeam, opponent) {
+  const event = { ...template, minute, isCritical: !!isCritical };
+  const userActor = pickScenePlayer(userTeam, template, true);
+  const oppActor = pickScenePlayer(opponent, template, false);
+  const supporting = pickScenePlayer(userTeam, { ...template, prefer: 'creator' }, true);
+  const marker = pickScenePlayer(opponent, { ...template, prefer: 'defender' }, false);
+  const names = {
+    user: userActor?.zhName || userActor?.name || '我方球员',
+    opponent: oppActor?.zhName || oppActor?.name || '对方球员',
+    support: supporting?.zhName || supporting?.name || '队友',
+    marker: marker?.zhName || marker?.name || '对方防守人'
+  };
+  const scene = sceneText(template, names, minute, isCritical);
+  event.title = scene.title || template.title;
+  event.desc = scene.desc || template.desc;
+  event.actor = names;
+  event.opponentAdjustment = opponentAdjustment(template, opponent);
+  return event;
+}
+
+function pickScenePlayer(team, template = {}, userSide = true) {
+  const squad = team.squad || [];
+  const prefer = template.prefer || template.type || '';
+  let candidates = squad.filter(p => p.isStarter);
+  const by = (regex) => candidates.filter(p => regex.test(p.position || ''));
+  let pool = [];
+  if (/防守|单刀|黄牌|体能/.test(prefer) || template.criticalKind === 'one_on_one_against') pool = by(/GK|CB|LB|RB|DM/);
+  if (/边路|传中|Wide|边/.test(prefer) || template.id === 'WIDE_OVERLOAD') pool = by(/LW|RW|LB|RB|W/);
+  if (/中路|核心|组织|creator/.test(prefer) || template.id === 'CENTRAL_BLOCKED') pool = by(/AM|CM|DM|LW|RW/);
+  if (/反击|单刀|点球/.test(prefer) || template.criticalKind === 'one_on_one_for' || template.criticalKind === 'penalty_for') pool = by(/ST|CF|LW|RW|AM/);
+  if (/定位球|角球/.test(prefer) || template.id === 'SETPIECE_ATTACK') pool = by(/CB|ST|CF|DM/);
+  if (!pool.length) pool = candidates.length ? candidates : squad;
+  return sample(pool) || squad[0];
+}
+
+function sceneText(template, n, minute, isCritical) {
+  const id = template.id;
+  const kind = template.criticalKind;
+  if (kind === 'one_on_one_for') return { title: `${n.user} 获得单刀良机`, desc: `${minute}'，${n.support} 的直塞打穿防线，${n.user} 面对门将。对手替补席已经有人在热身，显然准备改变防线高度。` };
+  if (kind === 'one_on_one_against') return { title: `${n.opponent} 反越位形成单刀`, desc: `${minute}'，对手一次直塞撕开防线，${n.opponent} 单刀冲向禁区。对手整体有收缩后反击的迹象，但具体意图仍不明朗。` };
+  if (kind === 'penalty_for') return { title: `裁判判给你点球`, desc: `${minute}'，${n.user} 在禁区内被放倒，主裁指向点球点。对手门将拖延时间，试图干扰主罚者心态。` };
+  if (kind === 'penalty_against') return { title: `对手获得点球`, desc: `${minute}'，禁区内一次身体接触后主裁判罚点球，${n.opponent} 站上十二码。对手替补席情绪高涨，但你只能通过经验判断他们的心理变化。` };
+  if (kind === 'key_injury') return { title: `${n.user} 无法坚持比赛`, desc: `${minute}'，${n.user} 在一次对抗后倒地示意无法继续。对手看到你阵型被迫调整，开始尝试加快节奏。` };
+  if (id === 'SETPIECE_ATTACK') return { title: `${n.user} 高高跃起争顶`, desc: `${minute}'，角球开到禁区，${n.user} 抢在${n.marker}身前起跳，皮球飞向危险区域。对手开始加强后点保护。` };
+  if (id === 'FATIGUE_DROP') return { title: `${n.user} 和中前场体能明显下降`, desc: `${minute}'，连续冲刺后，${n.user} 回追速度下降，中场距离被拉开。对手似乎准备利用这一侧做文章。` };
+  if (id === 'WIDE_OVERLOAD') return { title: `${n.user} 在边路制造人数优势`, desc: `${minute}'，${n.user} 与边后卫连续套边，${n.marker} 被迫一防二。对手边路开始回收，但中路保护可能出现空隙。` };
+  if (id === 'COUNTER_CHANCE') return { title: `${n.user} 带出反击机会`, desc: `${minute}'，断球后${n.user}第一时间向前推进，${n.support} 正在身前斜插。对手中卫线一边后退一边招呼队友补位。` };
+  if (id === 'CENTRAL_BLOCKED') return { title: `${n.user} 在中路被重点限制`, desc: `${minute}'，${n.user} 连续接球都被${n.marker}贴身干扰，中路推进被堵。对手正在压缩肋部空间。` };
+  if (id === 'BUILD_PRESS') return { title: `${n.user} 后场出球遭遇压迫`, desc: `${minute}'，${n.user} 接球后立刻被逼抢，对手前场三人压上，试图迫使你长传。` };
+  return { title: template.title.replace('你的', n.user), desc: `${minute}'，${template.desc} 对手也在做微调，但只能从站位变化看出大致方向。` };
+}
+
+function opponentAdjustment(template, opponent) {
+  const styles = [
+    '对手开始略微收缩中路，试图诱导你走边路。',
+    '对手提高了第一道压迫，但后腰没有完全前顶。',
+    '对手边后卫站位更谨慎，像是在保护身后空间。',
+    '对手前场留下一名速度点，准备利用转换机会。',
+    '对手中卫线略微后撤，试图降低被打身后的风险。'
+  ];
+  const avg = teamAverage(opponent, true);
+  if (avg >= 84) return '对手调整非常隐蔽，只能看出他们正在压缩你的主要进攻通道。';
+  return sample(styles);
 }
 
 export function baseTeamPower(team, tactics = {}) {
@@ -114,6 +186,9 @@ export function applyEventChoice(match, optionIndex) {
     resultText += ` 结果：${note}${xgText}。`;
   }
 
+  const opponentAdjustmentText = event.opponentAdjustment || opponentAdjustment(event, opponent);
+  if (opponentAdjustmentText) resultText += ` 对手调整：${opponentAdjustmentText}`;
+
   const record = {
     minute: event.minute,
     eventId: event.id,
@@ -130,10 +205,12 @@ export function applyEventChoice(match, optionIndex) {
     injuries: extraNotes.filter(x => x.includes('伤退') || x.includes('受伤')),
     score: { ...match.score },
     resultText,
-    effectText: effectSummary(effects)
+    effectText: effectSummary(effects),
+    opponentAdjustment: opponentAdjustmentText
   };
   match.choices.push(record);
   match.timeline.push(record);
+  match.pendingResult = record;
   match.eventIndex += 1;
   updateMatchPhase(match);
   return record;
@@ -309,7 +386,6 @@ export function finalizeMatch(match) {
     resultText: `终场阶段补充 xG：你 +${lateUserXg.toFixed(2)} / 对手 +${lateOppXg.toFixed(2)}。${goalText} 当前比分 ${match.score.user}-${match.score.opponent}。`
   });
 
-  if (match.stage !== 'league') resolveKnockoutDraw(match, userTeam, opponent);
   match.completed = true;
   match.phase = 'done';
   return match;
