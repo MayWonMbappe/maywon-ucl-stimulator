@@ -1,19 +1,13 @@
-# Cloudflare Pages public-output deployment
+# Cloudflare 当前推荐填法
 
-This package intentionally places the whole static site inside `public/`.
+如果你看到的是 Workers Builds 界面，字段包括 Build command / Deploy command / Non-production branch deploy command / Path，请填：
 
-Use these Cloudflare Pages settings:
+```text
+Build command: npm install
+Deploy command: npm run deploy
+Non-production branch deploy command: npm run preview
+Path: 留空
+```
 
-- Framework preset: None / Static HTML
-- Root directory: leave blank
-- Build command: `exit 0`
-- Build output directory: `public`
-
-Why: Cloudflare Pages parses `_redirects` only from the static asset/build output directory. If an old `_redirects` remains in the repository root, using `public` as the build output directory prevents Cloudflare from reading the old root-level `_redirects`.
-
-Do not set Build output directory to `.` for this package.
-
-## 2026-06-20 Round 8 flow fix
-
-This build fixes a league-phase flow bug: after Round 7, even if the selected club is already mathematically in the elimination zone, the game must continue to Matchday 8. League-phase elimination or qualification is finalized only after the user's eighth league-phase match.
-
+不要再只填 `npx wrangler deploy`，因为你的日志显示 CI 没有稳定读取 compatibility_date。
+本包通过 package.json 脚本直接把 `--compatibility-date 2026-06-20` 传给 Wrangler。

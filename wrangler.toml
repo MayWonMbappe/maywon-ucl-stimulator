@@ -1,0 +1,7 @@
+name = "maywon-ucl-stimulator"
+compatibility_date = "2026-06-20"
+
+[assets]
+directory = "./public"
+html_handling = "none"
+not_found_handling = "none"

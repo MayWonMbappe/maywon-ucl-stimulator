@@ -1,63 +1,60 @@
-# Cloudflare Workers Static Assets 部署说明
+# Cloudflare Workers Static Assets 部署说明（CLI flags 强制版）
 
-本包用于 Cloudflare Workers / Static Assets 新界面。
+本包用于 Cloudflare Workers Builds / Static Assets 界面。
 
-## 当前修复
+## 必须填写
 
-Cloudflare 报错：
-
-```text
-A compatibility_date is required when publishing.
-```
-
-已在仓库根目录加入 `wrangler.jsonc`：
-
-```jsonc
-{
-  "name": "maywon-ucl-stimulator",
-  "compatibility_date": "2026-06-20",
-  "assets": {
-    "directory": "./public",
-    "html_handling": "none",
-    "not_found_handling": "none"
-  }
-}
-```
-
-## Cloudflare 设置推荐
-
-```text
 Build command:
-exit 0
+
+```bash
+npm install
+```
 
 Deploy command:
-npx wrangler deploy
+
+```bash
+npm run deploy
+```
 
 Non-production branch deploy command:
-npx wrangler versions upload
+
+```bash
+npm run preview
+```
 
 Path:
+
+```text
 留空
 ```
 
-如果你不想改 Deploy command，继续用下面这两个也可以，因为 `wrangler.jsonc` 已经提供 compatibility_date：
+## 关键说明
 
-```text
-Deploy command:
-npx wrangler deploy --assets ./public/
+这版不再只依赖 wrangler.toml / wrangler.jsonc 是否被 CI 成功读取。
+`package.json` 的 deploy 脚本会在命令行直接传入：
 
-Non-production branch deploy command:
-npx wrangler versions upload --assets ./public/
+```bash
+--name maywon-ucl-stimulator --compatibility-date 2026-06-20 --assets ./public/
 ```
 
-## GitHub 根目录应包含
+这样即使 CI 没读到配置文件，也能拿到 Worker 名称、兼容日期和静态资源目录。
+
+## 仓库根目录必须有
 
 ```text
 public/
-wrangler.jsonc
 package.json
+wrangler.toml
+wrangler.jsonc
 CLOUDFLARE_WORKERS_DEPLOY_README.md
-CLOUDFLARE_PUBLIC_DEPLOY_README.md
 ```
 
-注意：不要把 `wrangler.jsonc` 放进 `public/`，它必须在仓库根目录。
+`public/` 里必须有：
+
+```text
+index.html
+styles.css
+data/
+js/
+```
+

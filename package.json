@@ -1,7 +1,9 @@
 {
+  "name": "maywon-ucl-stimulator",
+  "private": true,
   "scripts": {
-    "deploy": "wrangler deploy",
-    "preview": "wrangler dev"
+    "deploy": "wrangler deploy --name maywon-ucl-stimulator --compatibility-date 2026-06-20 --assets ./public/",
+    "preview": "wrangler versions upload --name maywon-ucl-stimulator --compatibility-date 2026-06-20 --assets ./public/"
   },
   "devDependencies": {
     "wrangler": "latest"
