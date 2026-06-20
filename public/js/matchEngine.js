@@ -25,9 +25,15 @@ export function createMatch(season, fixture, tactics) {
     halftime: null,
     eventIndex: 0,
     phase: 'first_half',
-    eventPlan: buildEventPlan(userTeam, opponent),
+    eventPlan: buildEventPlan(userTeam, opponent, season.playerStatus || {}),
     pendingResult: null,
     halftimeDone: false,
+    opponentState: { centralLock: 0, wideTrap: 0, press: 0, counterThreat: 0, setPieceGuard: 0, fatigueTarget: 0, disciplineBait: 0 },
+    playerStatus: season.playerStatus || {},
+    yellowCards: {},
+    cards: [],
+    redCards: [],
+    sentOff: {},
     injuries: [],
     choices: [],
     timeline: [],
@@ -38,27 +44,27 @@ export function createMatch(season, fixture, tactics) {
   };
 }
 
-function buildEventPlan(userTeam, opponent) {
+function buildEventPlan(userTeam, opponent, playerStatus = {}) {
   const firstHalfPool = EVENT_TEMPLATES.filter(e => e.id !== 'FATIGUE_DROP');
   const secondHalfPool = EVENT_TEMPLATES;
-  const firstHalf = shuffleLocal(firstHalfPool).slice(0, 3).map((e, i) => enrichEvent(e, [12, 27, 42][i], false, userTeam, opponent));
+  const firstHalf = shuffleLocal(firstHalfPool).slice(0, 3).map((e, i) => enrichEvent(e, [12, 27, 42][i], false, userTeam, opponent, playerStatus));
   const secondHalf = shuffleLocal(secondHalfPool).slice(0, 4).map((e, i) => {
     const minute = e.id === 'FATIGUE_DROP' ? sample([58, 64, 72, 82]) : [55, 66, 78, 86][i];
-    return enrichEvent(e, minute, false, userTeam, opponent);
+    return enrichEvent(e, minute, false, userTeam, opponent, playerStatus);
   });
   const criticalTemplate = sample(CRITICAL_MOMENT_TEMPLATES);
   const criticalMinute = sample([18, 34, 51, 73, 88]);
-  const criticalEvent = enrichEvent(criticalTemplate, criticalMinute, true, userTeam, opponent);
+  const criticalEvent = enrichEvent(criticalTemplate, criticalMinute, true, userTeam, opponent, playerStatus);
   return [...firstHalf, ...secondHalf, criticalEvent].sort((a, b) => a.minute - b.minute);
 }
 
 function shuffleLocal(arr) { return [...arr].sort(() => Math.random() - .5); }
 
-function enrichEvent(template, minute, isCritical, userTeam, opponent) {
+function enrichEvent(template, minute, isCritical, userTeam, opponent, playerStatus = {}) {
   const event = { ...template, minute, isCritical: !!isCritical };
-  const userActor = pickScenePlayer(userTeam, template, true);
+  const userActor = pickScenePlayer(userTeam, template, true, playerStatus);
   const oppActor = pickScenePlayer(opponent, template, false);
-  const supporting = pickScenePlayer(userTeam, { ...template, prefer: 'creator' }, true);
+  const supporting = pickScenePlayer(userTeam, { ...template, prefer: 'creator' }, true, playerStatus);
   const marker = pickScenePlayer(opponent, { ...template, prefer: 'defender' }, false);
   const names = {
     user: userActor?.zhName || userActor?.name || '我方球员',
@@ -70,14 +76,24 @@ function enrichEvent(template, minute, isCritical, userTeam, opponent) {
   event.title = scene.title || template.title;
   event.desc = scene.desc || template.desc;
   event.actor = names;
-  event.opponentAdjustment = opponentAdjustment(template, opponent);
+  event.actorInfo = {
+    user: userActor ? { name: userActor.name, zhName: userActor.zhName || userActor.name, position: userActor.position } : null,
+    opponent: oppActor ? { name: oppActor.name, zhName: oppActor.zhName || oppActor.name, position: oppActor.position } : null,
+    support: supporting ? { name: supporting.name, zhName: supporting.zhName || supporting.name, position: supporting.position } : null,
+    marker: marker ? { name: marker.name, zhName: marker.zhName || marker.name, position: marker.position } : null
+  };
+  event.opponentAdjustment = null;
   return event;
 }
 
-function pickScenePlayer(team, template = {}, userSide = true) {
+function pickScenePlayer(team, template = {}, userSide = true, playerStatus = {}) {
   const squad = team.squad || [];
   const prefer = template.prefer || template.type || '';
-  let candidates = squad.filter(p => p.isStarter);
+  let candidates = squad.filter(p => p.isStarter && !playerStatus[p.name]?.suspended && !playerStatus[p.name]?.matchUnavailable);
+  if (candidates.length < 11) {
+    const bench = squad.filter(p => !p.isStarter && !playerStatus[p.name]?.suspended && !playerStatus[p.name]?.matchUnavailable);
+    candidates = [...candidates, ...bench].slice(0, 11);
+  }
   const by = (regex) => candidates.filter(p => regex.test(p.position || ''));
   let pool = [];
   if (/防守|单刀|黄牌|体能/.test(prefer) || template.criticalKind === 'one_on_one_against') pool = by(/GK|CB|LB|RB|DM/);
@@ -85,7 +101,7 @@ function pickScenePlayer(team, template = {}, userSide = true) {
   if (/中路|核心|组织|creator/.test(prefer) || template.id === 'CENTRAL_BLOCKED') pool = by(/AM|CM|DM|LW|RW/);
   if (/反击|单刀|点球/.test(prefer) || template.criticalKind === 'one_on_one_for' || template.criticalKind === 'penalty_for') pool = by(/ST|CF|LW|RW|AM/);
   if (/定位球|角球/.test(prefer) || template.id === 'SETPIECE_ATTACK') pool = by(/CB|ST|CF|DM/);
-  if (!pool.length) pool = candidates.length ? candidates : squad;
+  if (!pool.length) pool = candidates.length ? candidates : squad.filter(p => !playerStatus[p.name]?.suspended && !playerStatus[p.name]?.matchUnavailable);
   return sample(pool) || squad[0];
 }
 
@@ -106,17 +122,61 @@ function sceneText(template, n, minute, isCritical) {
   return { title: template.title.replace('你的', n.user), desc: `${minute}'，${template.desc} 对手也在做微调，但只能从站位变化看出大致方向。` };
 }
 
-function opponentAdjustment(template, opponent) {
-  const styles = [
-    '对手开始略微收缩中路，试图诱导你走边路。',
-    '对手提高了第一道压迫，但后腰没有完全前顶。',
-    '对手边后卫站位更谨慎，像是在保护身后空间。',
-    '对手前场留下一名速度点，准备利用转换机会。',
-    '对手中卫线略微后撤，试图降低被打身后的风险。'
+function applyOpponentAdjustment(match, template, opponent) {
+  const id = template.id || '';
+  const plans = [
+    { key: 'centralLock', weight: /CENTRAL|BUILD_PRESS|核心|中路/.test(id) ? 4 : 1, text: '对手中路距离明显收紧，开始切断你前腰与中锋之间的传球线。', effects: { centralLock: 1, counterThreat: 0.15 } },
+    { key: 'wideTrap', weight: /WIDE|边路/.test(id) ? 4 : 1, text: '对手边路防守改成诱导式压迫，边后卫身后空间减少，但弱侧可能被放空。', effects: { wideTrap: 1, setPieceGuard: 0.1 } },
+    { key: 'press', weight: /BUILD|COUNTER|后场/.test(id) ? 4 : 1, text: '对手第一道压迫提前，逼你更早处理球，后场失误风险上升。', effects: { press: 1, counterThreat: 0.2 } },
+    { key: 'counterThreat', weight: /COUNTER|单刀|反击/.test(id) ? 4 : 1, text: '对手前场始终留下一名速度点，像是在等你压上后的转换机会。', effects: { counterThreat: 1 } },
+    { key: 'setPieceGuard', weight: /SETPIECE|定位球/.test(id) ? 4 : 1, text: '对手开始把最高的中卫固定在后点区域，定位球二点保护更严密。', effects: { setPieceGuard: 1 } },
+    { key: 'fatigueTarget', weight: /FATIGUE/.test(id) ? 5 : 1, text: '对手在你的体能薄弱侧连续转移，试图把比赛拖入高消耗节奏。', effects: { fatigueTarget: 1, press: 0.25 } },
+    { key: 'disciplineBait', weight: /YELLOW|黄牌|防守/.test(id) ? 4 : 1, text: '对手开始用身体接触和小动作刺激你的防守球员，犯规风险被悄悄放大。', effects: { disciplineBait: 1 } },
+    { key: 'centralLock', weight: 1, text: '对手站位变化很小，但你能感觉他们在优先压缩禁区弧顶区域。', effects: { centralLock: 0.6, setPieceGuard: 0.2 } },
+    { key: 'wideTrap', weight: 1, text: '对手没有明显前压，只是把弱侧边锋回收到半空间，准备限制你的转移。', effects: { wideTrap: 0.6, counterThreat: 0.15 } }
   ];
-  const avg = teamAverage(opponent, true);
-  if (avg >= 84) return '对手调整非常隐蔽，只能看出他们正在压缩你的主要进攻通道。';
-  return sample(styles);
+  const weighted = [];
+  for (const plan of plans) for (let i = 0; i < plan.weight; i++) weighted.push(plan);
+  const picked = sample(weighted) || plans[0];
+  if (!match.opponentState) match.opponentState = {};
+  for (const [key, value] of Object.entries(picked.effects)) {
+    match.opponentState[key] = clamp((match.opponentState[key] || 0) + value, 0, 3);
+  }
+  return picked;
+}
+
+function decayOpponentState(match) {
+  if (!match.opponentState) return;
+  for (const key of Object.keys(match.opponentState)) match.opponentState[key] = Math.max(0, match.opponentState[key] * 0.72);
+}
+
+
+export function ensureCurrentEventPlayable(match) {
+  const event = match?.eventPlan?.[match.eventIndex];
+  if (!event || !event.actorInfo?.user) return event;
+  const status = match.playerStatus || {};
+  const currentName = event.actorInfo.user.name;
+  if (!match.sentOff?.[currentName] && !status[currentName]?.suspended && !status[currentName]?.matchUnavailable) return event;
+  const userTeam = getTeamById(match.userTeamId);
+  const opponent = getTeamById(match.opponentId);
+  const replacement = pickScenePlayer(userTeam, event, true, status);
+  if (!replacement) return event;
+  const supporting = pickScenePlayer(userTeam, { ...event, prefer: 'creator' }, true, status);
+  const marker = pickScenePlayer(opponent, { ...event, prefer: 'defender' }, false);
+  const names = {
+    user: replacement.zhName || replacement.name,
+    opponent: event.actor?.opponent || '对方球员',
+    support: supporting?.zhName || supporting?.name || '队友',
+    marker: marker?.zhName || marker?.name || '对方防守人'
+  };
+  const scene = sceneText(event, names, event.minute, event.isCritical);
+  event.actor = names;
+  event.actorInfo.user = { name: replacement.name, zhName: replacement.zhName || replacement.name, position: replacement.position };
+  event.actorInfo.support = supporting ? { name: supporting.name, zhName: supporting.zhName || supporting.name, position: supporting.position } : null;
+  event.actorInfo.marker = marker ? { name: marker.name, zhName: marker.zhName || marker.name, position: marker.position } : null;
+  event.title = scene.title;
+  event.desc = `${scene.desc}（原定参与者已因停赛/红牌无法继续，系统已自动调整为可用球员。）`;
+  return event;
 }
 
 export function baseTeamPower(team, tactics = {}) {
@@ -157,8 +217,8 @@ export function applyEventChoice(match, optionIndex) {
   const effects = { ...option.effects };
   applyTraitSynergy(effects, option.tags || [], userTeam);
 
-  const userDelta = calculateXgDelta(effects, userTeam, opponent) * (event.isCritical ? 1.25 : 1);
-  const oppDelta = calculateOpponentDelta(effects, opponent, userTeam) * (event.isCritical ? 1.25 : 1);
+  const userDelta = calculateXgDelta(effects, userTeam, opponent, match, event) * (event.isCritical ? 1.25 : 1);
+  const oppDelta = calculateOpponentDelta(effects, opponent, userTeam, match, event) * (event.isCritical ? 1.25 : 1);
   match.xg.user += userDelta;
   match.xg.opponent += oppDelta;
   match.resolvedXg.user += userDelta;
@@ -178,16 +238,21 @@ export function applyEventChoice(match, optionIndex) {
     if (oppGoalRolled) goals.push(recordGoal(match, 'opponent', opponent, event.minute + (userGoalRolled ? 1 : 0), event.title, option.tags || []));
   }
 
+  resolveDiscipline(match, event, effects, extraNotes, userTeam);
+
   if (goals.length) {
     const goalText = goals.map(g => `⚽ ${g.minute}' ${g.scorerZhName}（${g.teamName}）`).join('；');
-    resultText += ` 结果：${goalText}。${extraNotes.join(' ')}${xgText}。`;
+    const actionText = describeGoalBuildUp(event, option, goals);
+    resultText += ` 结果：${actionText}${goalText}。${extraNotes.join(' ')}${xgText}。`;
   } else {
-    const note = extraNotes.length ? `${extraNotes.join(' ')} ` : '机会已经形成，但这次没有改写比分。';
+    const note = extraNotes.length ? `${extraNotes.join(' ')} ` : describeNoGoalOutcome(match, event, option, effects, userTeam, opponent);
     resultText += ` 结果：${note}${xgText}。`;
   }
 
-  const opponentAdjustmentText = event.opponentAdjustment || opponentAdjustment(event, opponent);
+  const opponentPlan = applyOpponentAdjustment(match, event, opponent);
+  const opponentAdjustmentText = opponentPlan.text;
   if (opponentAdjustmentText) resultText += ` 对手调整：${opponentAdjustmentText}`;
+  decayOpponentState(match);
 
   const record = {
     minute: event.minute,
@@ -203,6 +268,8 @@ export function applyEventChoice(match, optionIndex) {
     oppDelta,
     goals,
     injuries: extraNotes.filter(x => x.includes('伤退') || x.includes('受伤')),
+    cards: match.cards.filter(c => c.minute === event.minute),
+    redCards: match.redCards.filter(c => c.minute === event.minute),
     score: { ...match.score },
     resultText,
     effectText: effectSummary(effects),
@@ -214,6 +281,87 @@ export function applyEventChoice(match, optionIndex) {
   match.eventIndex += 1;
   updateMatchPhase(match);
   return record;
+}
+
+function describeGoalBuildUp(event, option, goals) {
+  const scorer = goals[0]?.scorerZhName || event.actor?.user || '进攻球员';
+  const patterns = [
+    `${scorer}摆脱防守后冷静完成最后一击，`,
+    `${event.actor?.support || '队友'}送出关键传球，${scorer}把握住机会，`,
+    `这次选择立刻改变了禁区内的空间，${scorer}完成致命处理，`,
+    `${scorer}在压力下仍然完成高质量终结，`
+  ];
+  return sample(patterns) || '';
+}
+
+function describeNoGoalOutcome(match, event, option, effects, userTeam, opponent) {
+  const actor = event.actor?.user || '我方球员';
+  const marker = event.actor?.marker || '对方防守人';
+  const keeper = opponent.squad?.find(p => p.position === 'GK')?.zhName || '对方门将';
+  const outcomes = [];
+  if ((effects.chanceQuality || 0) + (effects.instantGoalChance || 0) >= 2) {
+    outcomes.push(`${actor}晃开角度后起脚，皮球擦着立柱偏出。`);
+    outcomes.push(`${actor}低射打向远角，被${keeper}单掌托出底线。`);
+    outcomes.push(`${actor}抢到第一点攻门，皮球击中横梁弹出。`);
+    outcomes.push(`${actor}的射门穿过人群，却被${marker}在门线前挡出。`);
+  }
+  if ((effects.transitionAttack || 0) >= 2) {
+    outcomes.push(`${actor}带球推进形成三打二，但最后一传稍稍靠后，机会被拖慢。`);
+    outcomes.push(`${actor}高速推进后横传禁区，跟进队友铲射偏出。`);
+  }
+  if ((effects.setPieceAttack || 0) >= 1) {
+    outcomes.push(`${actor}高高跃起甩头攻门，皮球击中门柱外侧弹出。`);
+    outcomes.push(`${actor}在后点完成头球摆渡，但第二点被对手抢先解围。`);
+  }
+  if ((effects.defensiveStability || 0) >= 2) {
+    outcomes.push(`${actor}提前卡住线路完成拦截，但随后的长传被对手回收。`);
+    outcomes.push(`${actor}用身体挡住对手推进，迫使对方只能回传重组。`);
+  }
+  if ((effects.foulRisk || 0) >= 2) {
+    outcomes.push(`${actor}铲球动作很大，主裁口头警告后示意比赛继续。`);
+    outcomes.push(`${actor}和对手发生身体冲撞，场面短暂失控但没有出牌。`);
+  }
+  if (!outcomes.length) {
+    outcomes.push(`${actor}完成一次有效处理，但对手防线及时回收，没有让机会继续扩大。`);
+    outcomes.push(`${actor}试图加快节奏，传球意图被识破，球权被对手破坏出边线。`);
+    outcomes.push(`${actor}在狭小空间内完成摆脱，但最后一步触球稍大，被对手补防破坏。`);
+  }
+  return sample(outcomes);
+}
+
+function resolveDiscipline(match, event, effects, extraNotes, userTeam) {
+  const foulRisk = Math.max(0, effects.foulRisk || 0) + (match.opponentState?.disciplineBait || 0) * .75;
+  if (foulRisk <= 0) return;
+  const chance = clamp(foulRisk * .095, .02, .42);
+  if (Math.random() >= chance) return;
+  const player = findActorPlayer(userTeam, event.actorInfo?.user?.name) || pickScenePlayer(userTeam, { prefer: 'defender' }, true, match.playerStatus || {});
+  if (!player) return;
+  const name = player.name;
+  const zhName = player.zhName || player.name;
+  match.yellowCards[name] = (match.yellowCards[name] || 0) + 1;
+  const card = { minute: event.minute, playerName: name, playerZhName: zhName, teamId: userTeam.id, type: 'yellow' };
+  match.cards.push(card);
+  if (match.yellowCards[name] >= 2) {
+    match.sentOff[name] = true;
+    const red = { ...card, type: 'second_yellow_red' };
+    match.redCards.push(red);
+    if (match.playerStatus?.[name]) {
+      match.playerStatus[name].matchUnavailable = true;
+      match.playerStatus[name].suspended = true;
+      match.playerStatus[name].suspensionMatches = Math.max(match.playerStatus[name].suspensionMatches || 0, 1);
+      match.playerStatus[name].newSuspension = true;
+    }
+    match.xg.opponent += .12;
+    match.resolvedXg.opponent += .12;
+    extraNotes.push(`${zhName}第二次鲁莽犯规，两黄变一红被罚下；本场此后他不会再参与事件，下场自动停赛，防守压力指数上升。`);
+  } else {
+    extraNotes.push(`${zhName}一次鲁莽上抢吃到黄牌，之后防守选择会更受限制。`);
+  }
+}
+
+function findActorPlayer(team, name) {
+  if (!name) return null;
+  return team.squad?.find(p => p.name === name) || null;
 }
 
 function resolveCriticalMoment(match, event, option, effects, goals, extraNotes, userTeam, opponent) {
@@ -289,17 +437,26 @@ function applyTraitSynergy(effects, tags, team) {
   if (tags.includes('endurance_engine') && countTrait(team, 'endurance_engine') > 0) effects.control = (effects.control || 0) + 1;
 }
 
-function calculateXgDelta(effects, userTeam, opponent) {
+function calculateXgDelta(effects, userTeam, opponent, match = {}, event = {}) {
   const attack = (effects.chanceCreation || 0) * .045 + (effects.chanceQuality || 0) * .06 + (effects.transitionAttack || 0) * .045 + (effects.setPieceAttack || 0) * .035;
   const power = (baseTeamPower(userTeam) - baseTeamPower(opponent)) * .012;
-  return clamp(.05 + attack + power, 0, .55);
+  const state = match.opponentState || {};
+  let suppression = 0;
+  if (/CENTRAL|BUILD_PRESS/.test(event.id || '')) suppression += (state.centralLock || 0) * .035 + (state.press || 0) * .025;
+  if (/WIDE/.test(event.id || '')) suppression += (state.wideTrap || 0) * .038;
+  if (/SETPIECE/.test(event.id || '')) suppression += (state.setPieceGuard || 0) * .030;
+  if (/COUNTER/.test(event.id || '')) suppression -= Math.max(0, effects.transitionAttack || 0) * .004;
+  return clamp(.05 + attack + power - suppression, 0, .55);
 }
 
-function calculateOpponentDelta(effects, opponent, userTeam) {
+function calculateOpponentDelta(effects, opponent, userTeam, match = {}, event = {}) {
   const risk = (effects.counterRisk || 0) * .045 + Math.max(0, -(effects.defensiveStability || 0)) * .05 + (effects.instantConcedeChance || 0) * .008;
   const protection = (effects.defensiveStability || 0) * .025 + (effects.setPieceDefense || 0) * .02;
   const power = (baseTeamPower(opponent) - baseTeamPower(userTeam)) * .009;
-  return clamp(.04 + risk - protection + power, 0, .50);
+  const state = match.opponentState || {};
+  const pressureBonus = (state.counterThreat || 0) * .035 + (state.press || 0) * .020 + (state.fatigueTarget || 0) * .025;
+  const setPieceBonus = /SETPIECE/.test(event.id || '') ? (state.setPieceGuard || 0) * .012 : 0;
+  return clamp(.04 + risk - protection + power + pressureBonus + setPieceBonus, 0, .56);
 }
 
 function rollEventGoal(xgDelta, instantChance, team, user) {
@@ -312,7 +469,7 @@ function rollEventGoal(xgDelta, instantChance, team, user) {
 }
 
 function recordGoal(match, side, team, minute, source, tags = []) {
-  const scorer = pickScorer(team, tags);
+  const scorer = pickScorer(team, tags, match);
   match.score[side] += 1;
   const goal = {
     minute,
@@ -328,8 +485,8 @@ function recordGoal(match, side, team, minute, source, tags = []) {
   return goal;
 }
 
-function pickScorer(team, tags = []) {
-  const attackers = team.squad.filter(p => p.position !== 'GK');
+function pickScorer(team, tags = [], match = {}) {
+  const attackers = team.squad.filter(p => p.position !== 'GK' && !match.sentOff?.[p.name] && !match.playerStatus?.[p.name]?.suspended && !match.playerStatus?.[p.name]?.matchUnavailable);
   const weighted = [];
   for (const player of attackers) {
     let weight = 1;

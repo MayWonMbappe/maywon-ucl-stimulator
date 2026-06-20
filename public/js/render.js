@@ -4,7 +4,7 @@ import { state, saveState, resetState } from './state.js';
 import { go, routeParts } from './router.js';
 import { createSeason, currentFixture, simulateComputerRound, applyManagement, advanceRound, finishLeagueIfNeeded, completeLeaguePhase, processKnockoutResult } from './seasonEngine.js';
 import { rankedStandings, applyResult, zoneLabel, qualificationBriefing } from './standingsEngine.js';
-import { createMatch, applyEventChoice, finalizeMatch, applyHalftime, matchOutcome } from './matchEngine.js';
+import { createMatch, applyEventChoice, finalizeMatch, applyHalftime, matchOutcome, ensureCurrentEventPlayable } from './matchEngine.js';
 import { getCurrentEvent, eventProgressText } from './eventEngine.js';
 import { addSeasonArchive, loadArchive, clearArchive } from './historyStore.js';
 import { teamAverage, stageName } from './utils.js';
@@ -80,15 +80,18 @@ function renderSeason() {
   const fixture = currentFixture(s);
   const opponent = fixture ? getTeamById(fixture.opponentId) : null;
   const briefing = s.round >= 7 && s.round <= 8 ? `<div class="card"><h3>第 ${s.round} 轮出线形势</h3><p class="meta" style="white-space:pre-line">${qualificationBriefing(s)}</p></div>` : '';
+  const managementPrompt = s.awaitingManagement ? `<div class="card urgent-card"><h3>第 ${s.round} 轮赛前管理待完成</h3><p class="meta">上一场已经结束，当前轮次已推进到第 ${s.round} 轮。请先完成轮间管理，再进入下一场。</p><button class="primary" data-go="/management">进入轮间管理</button></div>` : '';
+  const primaryAction = s.awaitingManagement ? `<button class="primary" data-go="/management">进入轮间管理</button>` : `<button class="primary" data-go="/prematch">进入赛前部署</button>`;
   set(html`<section class="hero"><p class="eyebrow">Season Hub</p><h2>${team.zhName || team.name} · 瑞士轮第 ${s.round} 轮</h2>
   <p>${fixture ? `下一场：${fixture.home ? '主场' : '客场'} vs ${opponent.zhName || opponent.name}` : describeUserPath(s)}</p>
-  <div class="actions"><button class="primary" data-go="/prematch">进入赛前部署</button><button data-go="/standings">查看积分榜</button><button data-go="/knockout">淘汰赛路径</button></div></section>${briefing}
+  <div class="actions">${primaryAction}<button data-go="/standings">查看积分榜</button><button data-go="/knockout">淘汰赛路径</button></div></section>${managementPrompt}${briefing}
   <div class="section-title"><h2>近期比赛</h2></div><div class="timeline">${s.history.slice().reverse().map(matchSummaryCard).join('') || '<p class="meta">暂无比赛记录。</p>'}</div>`);
 }
 
 function renderSeasonFinished(s, team) {
   const finishText = s.finish === 'champion' ? '你赢得了欧冠冠军！' : s.finish === 'league_eliminated' ? `联赛阶段第 ${s.leagueRank} 名，赛季结束。` : `赛季结束：${stageName((s.finish || '').replace('_eliminated',''))}出局。`;
-  set(`<section class="hero"><p class="eyebrow">Season Over</p><h2>${team.zhName || team.name}</h2><p>${finishText}</p><div class="actions"><button data-go="/history">查看历史记录</button><button class="primary" data-go="/teams">重新开档</button></div></section><div class="timeline">${(s.knockout?.bracketLog || []).map(x=>`<div class="timeline-item">${x}</div>`).join('')}</div>`);
+  const radar = seasonRadarCard(s);
+  set(`<section class="hero"><p class="eyebrow">Season Over</p><h2>${team.zhName || team.name}</h2><p>${finishText}</p><div class="actions"><button data-go="/history">查看历史记录</button><button class="primary" data-go="/teams">重新开档</button></div></section>${radar}<div class="timeline">${(s.knockout?.bracketLog || []).map(x=>`<div class="timeline-item">${x}</div>`).join('')}</div>`);
 }
 
 function renderKnockoutHub(s, team) {
@@ -127,15 +130,15 @@ function matchSummaryCard(m) {
 
 function renderPrematch() {
   if (!ensureSeason()) return;
-  const s = state.season, f = currentFixture(s); if (!f) return renderSeason();
+  const s = state.season, f = currentFixture(s); if (!f) return renderSeason(); if (s.awaitingManagement) return go('/management');
   const team = getTeamById(s.userTeamId), opp = getTeamById(f.opponentId);
   const tactics = { ...DEFAULT_TACTICS, ...(state.selectedTactics || {}) };
   const fields = tacticForm(tactics);
   const legInfo = f.totalLegs === 2 ? ` · 第${f.leg}回合${f.aggregate ? ` · 总比分 ${f.aggregate.user}-${f.aggregate.opponent}` : ''}` : '';
-  set(html`<section class="card"><h2>赛前部署 · ${stageName(s.stage)}${legInfo}</h2><p class="meta">${team.zhName} ${f.home?'主场':'客场/中立'} 对阵 ${opp.zhName || opp.name}。对手首发均分 ${teamAverage(opp,true)}。</p><div id="formation-preview">${formationPitch(team, tactics.formation)}</div><div class="form-grid">${fields}</div><div class="actions"><button class="primary" id="confirm-tactics">确认并进入比赛</button><button data-go="/season">返回</button></div></section>`);
+  set(html`<section class="card"><h2>赛前部署 · ${stageName(s.stage)}${legInfo}</h2><p class="meta">${team.zhName} ${f.home?'主场':'客场/中立'} 对阵 ${opp.zhName || opp.name}。对手首发均分 ${teamAverage(opp,true)}。</p><div id="formation-preview">${formationPitch(team, tactics.formation, s.playerStatus)}</div><div class="form-grid">${fields}</div><div class="actions"><button class="primary" id="confirm-tactics">确认并进入比赛</button><button data-go="/season">返回</button></div></section>`);
   const formationSelect = document.querySelector('select[name="formation"]');
   formationSelect?.addEventListener('change', () => {
-    document.getElementById('formation-preview').innerHTML = formationPitch(team, formationSelect.value);
+    document.getElementById('formation-preview').innerHTML = formationPitch(team, formationSelect.value, s.playerStatus);
   });
   document.getElementById('confirm-tactics').addEventListener('click', () => {
     const form = document.querySelector('#tactic-form');
@@ -150,8 +153,12 @@ function tacticForm(tactics) {
   return `<form id="tactic-form" class="form-grid"><label>阵型<select name="formation">${Object.values(FORMATIONS).map(o=>`<option value="${o.id}" ${tactics.formation===o.id?'selected':''}>${o.name}</option>`).join('')}</select></label>${Object.entries(TACTIC_GROUPS).map(([key, group])=>`<label>${group.label}<select name="${key}">${Object.entries(group.options).map(([id,o])=>`<option value="${id}" ${tactics[key]===id?'selected':''}>${o.name}</option>`).join('')}</select></label>`).join('')}</form>`;
 }
 
-function formationPitch(team, formation) {
-  const starters = team.squad.filter(p=>p.isStarter);
+function formationPitch(team, formation, playerStatus = {}) {
+  let starters = team.squad.filter(p=>p.isStarter && !playerStatus[p.name]?.suspended && !playerStatus[p.name]?.matchUnavailable);
+  if (starters.length < 11) {
+    const bench = team.squad.filter(p=>!p.isStarter && !playerStatus[p.name]?.suspended && !playerStatus[p.name]?.matchUnavailable);
+    starters = [...starters, ...bench].slice(0, 11);
+  }
   const assigned = assignFormationSlots(starters, formation);
   return `<div class="pitch formation-${formation}">${assigned.map(({p, x, y, role})=>`<div class="player-dot" style="left:${x}%;top:${y}%"><strong>${shortPlayerName(p)}</strong><br><span>${role}</span></div>`).join('')}</div><p class="small">阵型图会随阵型切换自动重排；球员优先按实际位置落位，避免边锋/中锋错位。</p>`;
 }
@@ -202,6 +209,7 @@ function renderMatch() {
   if (m.pendingResult) return renderEventResult(m);
   if (m.phase === 'halftime') return go('/halftime');
   if (m.phase === 'fulltime') { finalizeAndStore(); return go('/postmatch'); }
+  ensureCurrentEventPlayable(m);
   const event = getCurrentEvent(m);
   const user = getTeamById(m.userTeamId), opp = getTeamById(m.opponentId);
   const legInfo = m.fixture?.totalLegs === 2 ? ` · 第${m.fixture.leg}回合${m.fixture.aggregate ? ` · 总比分 ${m.fixture.aggregate.user}-${m.fixture.aggregate.opponent}` : ''}` : '';
@@ -240,6 +248,87 @@ function timelineItem(t) {
   return `<div class="timeline-item ${t.isCritical ? 'timeline-critical' : ''}"><strong>${t.isCritical ? '⚠ ' : ''}${t.minute || ''}' ${t.title}</strong><br><span class="meta">${t.resultText || t.optionText || ''}</span>${goals}${tagText}<br><span class="small">比分 ${t.score?.user ?? '-'}-${t.score?.opponent ?? '-'}${effectText ? ` · ${effectText}` : ''}</span></div>`;
 }
 
+function processSuspensionsAfterMatch(season, match) {
+  if (!season?.playerStatus) return;
+  for (const [name, st] of Object.entries(season.playerStatus)) {
+    st.matchUnavailable = false;
+    if (st.newSuspension) { st.newSuspension = false; continue; }
+    if (st.suspended && st.suspensionMatches) {
+      st.suspensionMatches -= 1;
+      if (st.suspensionMatches <= 0) {
+        st.suspended = false;
+        st.suspensionMatches = 0;
+        st.yellowCards = 0;
+      }
+    }
+  }
+}
+
+function seasonRadarCard(season) {
+  const metrics = seasonPerformanceMetrics(season);
+  const avgScore = Math.round(metrics.reduce((sum, m) => sum + m.score, 0) / metrics.length);
+  const grade = gradeForScore(avgScore);
+  return `<section class="card"><h2>赛季综合雷达图</h2><p class="meta">综合评分 ${avgScore}/100 · 评级 ${grade}。鼠标移动到任一指标点附近即可查看该维度的分数、评级和要求。</p>${radarSvg(metrics)}<div class="radar-legend">${metrics.map(m=>`<span class="badge tooltip-badge" data-tooltip="${escapeAttr(m.requirement)}">${m.label}: ${m.score} · ${m.grade}</span>`).join('')}</div></section>`;
+}
+
+function seasonPerformanceMetrics(season) {
+  const matches = season.history || [];
+  const played = Math.max(1, matches.length);
+  const gf = matches.reduce((s,m)=>s+(m.score?.user||0),0);
+  const ga = matches.reduce((s,m)=>s+(m.score?.opponent||0),0);
+  const xgf = matches.reduce((s,m)=>s+(m.xg?.user||0),0);
+  const xga = matches.reduce((s,m)=>s+(m.xg?.opponent||0),0);
+  const wins = matches.filter(m=>m.outcome==='win').length;
+  const decisionCount = matches.reduce((s,m)=>s+(m.choices?.length||0),0) || 1;
+  const positiveDecisions = matches.reduce((s,m)=>s+(m.choices||[]).filter(c=>(c.userDelta||0)>=(c.oppDelta||0)).length,0);
+  const goals = matches.reduce((s,m)=>s+(m.goals?.filter(g=>g.side==='user').length||0),0);
+  const cards = matches.reduce((s,m)=>s+(m.cards?.length||0),0);
+  const injuries = matches.reduce((s,m)=>s+(m.injuries?.length||0),0);
+  const knockoutWins = matches.filter(m=>m.stage!=='league' && m.outcome==='win').length;
+  const stageBonus = season.finish === 'champion' ? 18 : season.stage === 'champion' ? 18 : season.stage === 'ended' ? 0 : 6;
+  const data = [
+    { label:'进攻火力', score: clampScore(50 + (gf/played)*15 + (xgf/played)*10), requirement:'持续制造高质量机会，并把 xG 转化为实际进球。' },
+    { label:'防守稳固', score: clampScore(88 - (ga/played)*16 - (xga/played)*10), requirement:'限制对手禁区机会、减少失球和被反击次数。' },
+    { label:'战术执行', score: clampScore(45 + positiveDecisions/decisionCount*55), requirement:'多数关键抉择要让己方收益不低于对手收益。' },
+    { label:'临场应变', score: clampScore(48 + Math.min(35, decisionCount*1.1) + (season.managementHistory?.length||0)*2 - injuries*3), requirement:'通过轮间管理、中场调整和关键事件处理保持比赛主动权。' },
+    { label:'欧战抗压', score: clampScore(45 + wins/played*35 + stageBonus + knockoutWins*4), requirement:'在强强对话和淘汰赛节点拿到结果。' },
+    { label:'阵容管理', score: clampScore(88 - injuries*8 - cards*2 + (season.managementHistory?.length||0)*1.2), requirement:'控制伤病、停赛和疲劳，让关键球员在大场面可用。' },
+    { label:'纪律控制', score: clampScore(96 - cards*7), requirement:'减少黄牌、红牌和鲁莽犯规，避免被迫调整阵型。' },
+    { label:'淘汰赛表现', score: clampScore(matches.some(m=>m.stage!=='league') ? 45 + knockoutWins*12 + stageBonus : 45 + (season.leagueRank && season.leagueRank <= 8 ? 20 : 0)), requirement:'两回合中管理总比分，并在加时或点球压力下作出正确选择。' }
+  ];
+  return data.map(m=>({ ...m, grade: gradeForScore(m.score) }));
+}
+
+function clampScore(v) { return Math.max(0, Math.min(100, Math.round(v))); }
+function gradeForScore(score) {
+  if (score >= 97) return 'A+';
+  if (score >= 92) return 'A';
+  if (score >= 88) return 'A-';
+  if (score >= 84) return 'B+';
+  if (score >= 80) return 'B';
+  if (score >= 76) return 'B-';
+  if (score >= 72) return 'C+';
+  if (score >= 68) return 'C';
+  if (score >= 64) return 'C-';
+  if (score >= 58) return 'D';
+  if (score >= 45) return 'E';
+  return 'F';
+}
+
+function radarSvg(metrics) {
+  const size = 360, cx = 180, cy = 180, radius = 118;
+  const axes = metrics.map((m, i) => {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / metrics.length;
+    const x = cx + Math.cos(a) * radius;
+    const y = cy + Math.sin(a) * radius;
+    return { ...m, a, x, y, px: cx + Math.cos(a) * radius * (m.score/100), py: cy + Math.sin(a) * radius * (m.score/100) };
+  });
+  const rings = [20,40,60,80,100].map(v => polygonPoints(axes.map(ax=>({ x: cx + Math.cos(ax.a)*radius*(v/100), y: cy + Math.sin(ax.a)*radius*(v/100) }))));
+  const area = polygonPoints(axes.map(ax=>({x:ax.px,y:ax.py})));
+  return `<div class="radar-wrap"><svg class="radar-chart" viewBox="0 0 ${size} ${size}" role="img" aria-label="赛季表现雷达图">${rings.map(points=>`<polygon class="radar-ring" points="${points}"></polygon>`).join('')}${axes.map(ax=>`<line class="radar-axis" x1="${cx}" y1="${cy}" x2="${ax.x}" y2="${ax.y}"></line>`).join('')}<polygon class="radar-area" points="${area}"></polygon>${axes.map(ax=>`<g class="radar-point-group"><circle class="radar-point" cx="${ax.px.toFixed(1)}" cy="${ax.py.toFixed(1)}" r="4"></circle><circle class="radar-hotspot" cx="${ax.px.toFixed(1)}" cy="${ax.py.toFixed(1)}" r="24"><title>${escapeAttr(ax.label)}：${ax.score}/100 · ${ax.grade}｜${escapeAttr(ax.requirement)}</title></circle><text class="radar-label" x="${(cx + Math.cos(ax.a)*(radius+28)).toFixed(1)}" y="${(cy + Math.sin(ax.a)*(radius+28)).toFixed(1)}" text-anchor="middle">${ax.label}</text></g>`).join('')}</svg></div>`;
+}
+function polygonPoints(points) { return points.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '); }
+
 function renderHalftime() {
   const m = state.currentMatch; if (!m) return go('/season');
   const user = getTeamById(m.userTeamId), opp = getTeamById(m.opponentId);
@@ -262,8 +351,18 @@ function finalizeAndStore() {
     processKnockoutResult(s, m);
     knockoutUpdate = s.knockout?.bracketLog?.at(-1) || null;
   }
-  const summary = { id: m.id, round: m.round, stage: m.stage, userTeamName: userTeam.zhName || userTeam.name, opponentName: opp.zhName || opp.name, opponentId: opp.id, score: m.score, xg: m.xg, outcome: matchOutcome(m), choices: m.choices, timeline: m.timeline, tactics: m.tactics, halftime: m.halftime, highlights, goals: m.goals || [], injuries: m.injuries || [], penalty: m.penalty, knockoutUpdate };
+  const summary = { id: m.id, round: m.round, stage: m.stage, userTeamName: userTeam.zhName || userTeam.name, opponentName: opp.zhName || opp.name, opponentId: opp.id, score: m.score, xg: m.xg, outcome: matchOutcome(m), choices: m.choices, timeline: m.timeline, tactics: m.tactics, halftime: m.halftime, highlights, goals: m.goals || [], injuries: m.injuries || [], penalty: m.penalty, cards: [...(m.cards || []), ...(m.redCards || [])], redCards: m.redCards || [], knockoutUpdate };
   s.history.push(summary);
+  if (m.stage === 'league') {
+    const playedLeague = s.history.filter(x => x.stage === 'league').length;
+    if (playedLeague < s.maxLeagueRounds) {
+      s.round = Math.max(s.round, m.round + 1);
+      s.awaitingManagement = true;
+    } else {
+      s.awaitingManagement = false;
+    }
+  }
+  processSuspensionsAfterMatch(s, m);
   state.lastResult = summary;
   state.currentMatch = null;
   saveState();
@@ -271,10 +370,10 @@ function finalizeAndStore() {
 
 function renderPostmatch() {
   const r = state.lastResult; if (!r) return go('/season');
-  const isLastLeague = state.season?.stage === 'league' && state.season.round >= state.season.maxLeagueRounds;
+  const isLastLeague = r.stage === 'league' && r.round >= (state.season?.maxLeagueRounds || 8);
   const isLeague = r.stage === 'league';
   const nextButton = isLastLeague ? `<button class="primary" data-go="/league-result">查看联赛阶段结算</button>` : isLeague ? `<button class="primary" data-go="/management">进入轮间管理</button>` : `<button class="primary" data-go="/season">继续淘汰赛路径</button>`;
-  set(html`<section class="card"><h2>赛后报告</h2><div class="scoreboard"><h3>${r.userTeamName}</h3><div class="score">${r.score.user} - ${r.score.opponent}</div><h3>${r.opponentName}</h3></div><div class="kpi"><div><strong>${r.xg.user.toFixed(2)}</strong>你的 xG</div><div><strong>${r.xg.opponent.toFixed(2)}</strong>对手 xG</div><div><strong>${r.outcome}</strong>结果</div></div>${r.goals?.length ? `<h3>进球记录</h3><p class="goal-line">${goalList(r.goals)}</p>` : '<p class="meta">本场没有进球。</p>'}${r.injuries?.length ? `<h3>关键伤情</h3><p class="meta">${r.injuries.map(x=>`${x.minute}' ${x.playerZhName}伤退`).join('；')}</p>` : ''}${r.penalty ? `<p class="meta">点球大战：${r.penalty.user}-${r.penalty.opponent}</p>` : ''}<h3>${isLeague ? '本轮焦点' : '淘汰赛进展'}</h3><p class="meta">${isLeague ? (r.highlights.join('；') || '暂无明显爆冷。') : (r.knockoutUpdate || '路径已更新。')}</p><div class="actions">${nextButton}<button data-go="/standings">查看积分榜</button></div></section>`);
+  set(html`<section class="card"><h2>赛后报告</h2><div class="scoreboard"><h3>${r.userTeamName}</h3><div class="score">${r.score.user} - ${r.score.opponent}</div><h3>${r.opponentName}</h3></div><div class="kpi"><div><strong>${r.xg.user.toFixed(2)}</strong>你的 xG</div><div><strong>${r.xg.opponent.toFixed(2)}</strong>对手 xG</div><div><strong>${r.outcome}</strong>结果</div></div>${r.goals?.length ? `<h3>进球记录</h3><p class="goal-line">${goalList(r.goals)}</p>` : '<p class="meta">本场没有进球。</p>'}${r.injuries?.length ? `<h3>关键伤情</h3><p class="meta">${r.injuries.map(x=>`${x.minute}' ${x.playerZhName}伤退`).join('；')}</p>` : ''}${r.cards?.length ? `<h3>纪律事件</h3><p class="meta">${r.cards.map(x=>`${x.minute}' ${x.playerZhName}${x.type==='second_yellow_red'?'两黄变红':'黄牌'}`).join('；')}</p>` : ''}${r.penalty ? `<p class="meta">点球大战：${r.penalty.user}-${r.penalty.opponent}</p>` : ''}<h3>${isLeague ? '本轮焦点' : '淘汰赛进展'}</h3><p class="meta">${isLeague ? (r.highlights.join('；') || '暂无明显爆冷。') : (r.knockoutUpdate || '路径已更新。')}</p><div class="actions">${nextButton}<button data-go="/standings">查看积分榜</button></div></section>`);
 }
 
 function renderManagement() {
@@ -282,13 +381,16 @@ function renderManagement() {
   const choices = [['recovery','恢复'],['tactical','战术演练'],['attack','进攻训练'],['defense','防守训练'],['setpiece','定位球专项'],['rotation','轮换计划'],['mentality','大赛心理准备'],['care','重点球员护理']];
   set(`<section class="card"><h2>轮间管理</h2><p class="meta">每轮后选择 1 个主管理方案，影响体能、锐度、战术熟练度和士气。</p><div class="grid">${choices.map(([id,name])=>`<button data-management="${id}">${name}</button>`).join('')}</div></section>`);
   document.querySelectorAll('[data-management]').forEach(btn => btn.addEventListener('click', () => {
+    const wasAwaiting = !!state.season.awaitingManagement;
     applyManagement(state.season, btn.dataset.management);
-    if (state.season.stage === 'league' && state.season.round >= state.season.maxLeagueRounds) {
+    state.season.awaitingManagement = false;
+    const playedLeague = state.season.history.filter(x => x.stage === 'league').length;
+    if (state.season.stage === 'league' && playedLeague >= state.season.maxLeagueRounds) {
       completeLeaguePhase(state.season);
       if (state.season.completed && !state.season.archived) { state.season.archived = true; addSeasonArchive({ ...state.season, archivedAt: new Date().toISOString() }); }
       saveState(); go('/league-result'); return;
     }
-    advanceRound(state.season); finishLeagueIfNeeded(state.season);
+    if (!wasAwaiting) { advanceRound(state.season); finishLeagueIfNeeded(state.season); }
     if (state.season.completed && !state.season.archived) { state.season.archived = true; addSeasonArchive({ ...state.season, archivedAt: new Date().toISOString() }); }
     saveState(); go('/season');
   }));
@@ -321,5 +423,5 @@ function renderHistory() {
 function renderMatchDetail(id) {
   const m = state.season?.history?.find(x=>x.id===id) || loadArchive().flatMap(s=>s.history||[]).find(x=>x.id===id);
   if (!m) return go('/history');
-  set(`<section class="card"><h2>单场详情</h2><p class="meta">${m.userTeamName} ${m.score.user}-${m.score.opponent} ${m.opponentName} · xG ${m.xg.user.toFixed(2)}-${m.xg.opponent.toFixed(2)}</p>${m.goals?.length ? `<h3>进球记录</h3><p class="goal-line">${goalList(m.goals)}</p>` : ''}${m.injuries?.length ? `<h3>关键伤情</h3><p class="meta">${m.injuries.map(x=>`${x.minute}' ${x.playerZhName}伤退`).join('；')}</p>` : ''}<h3>关键抉择</h3><div class="timeline">${m.timeline.map(timelineItem).join('')}</div><div class="actions"><button data-go="/history">返回历史</button><button data-go="/season">返回赛季</button></div></section>`);
+  set(`<section class="card"><h2>单场详情</h2><p class="meta">${m.userTeamName} ${m.score.user}-${m.score.opponent} ${m.opponentName} · xG ${m.xg.user.toFixed(2)}-${m.xg.opponent.toFixed(2)}</p>${m.goals?.length ? `<h3>进球记录</h3><p class="goal-line">${goalList(m.goals)}</p>` : ''}${m.injuries?.length ? `<h3>关键伤情</h3><p class="meta">${m.injuries.map(x=>`${x.minute}' ${x.playerZhName}伤退`).join('；')}</p>` : ''}${m.cards?.length ? `<h3>纪律事件</h3><p class="meta">${m.cards.map(x=>`${x.minute}' ${x.playerZhName}${x.type==='second_yellow_red'?'两黄变红':'黄牌'}`).join('；')}</p>` : ''}<h3>关键抉择</h3><div class="timeline">${m.timeline.map(timelineItem).join('')}</div><div class="actions"><button data-go="/history">返回历史</button><button data-go="/season">返回赛季</button></div></section>`);
 }

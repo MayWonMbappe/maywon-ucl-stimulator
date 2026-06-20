@@ -171,3 +171,16 @@ select, input {
 .option-list .tooltip-badge::after { left: 0; transform: none; bottom: calc(100% + 6px); }
 .option-list .tooltip-badge:hover::after { transform: translateY(-2px); }
 @media (max-width: 680px) { .tooltip-badge::after { min-width: 190px; max-width: 260px; } }
+
+/* Season radar report */
+.urgent-card { border-color: rgba(255, 213, 79, .55); background: rgba(255, 213, 79, .08); }
+.radar-wrap { display: grid; place-items: center; margin: 14px 0; overflow-x: auto; }
+.radar-chart { width: min(100%, 420px); height: auto; }
+.radar-ring { fill: none; stroke: rgba(255,255,255,.15); stroke-width: 1; }
+.radar-axis { stroke: rgba(255,255,255,.18); stroke-width: 1; }
+.radar-area { fill: rgba(247, 215, 116, .22); stroke: rgba(247, 215, 116, .9); stroke-width: 2; }
+.radar-point { fill: var(--gold); stroke: rgba(8,13,25,.95); stroke-width: 2; }
+.radar-hotspot { fill: rgba(247, 215, 116, .001); stroke: transparent; cursor: help; }
+.radar-hotspot:hover + .radar-label, .radar-point-group:hover .radar-label { fill: #ffe48a; font-weight: 800; }
+.radar-label { fill: rgba(255,255,255,.78); font-size: 10px; pointer-events: none; }
+.radar-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

@@ -25,8 +25,13 @@ function generateUserOpponents(userTeamId) {
     .sort((a, b) => teamAverage(b, true) - teamAverage(a, true));
   const pots = [sorted.slice(0, 9), sorted.slice(9, 18), sorted.slice(18, 27), sorted.slice(27)];
   const picked = pots.map(pot => shuffle(pot).slice(0, 2));
-  const slots = [picked[0][0], picked[2][0], picked[1][0], picked[3][0], picked[0][1], picked[2][1], picked[1][1], picked[3][1]].filter(Boolean);
-  // 让 8 轮强弱尽量均衡，而不是前强后弱；主客场交替。
+  // 参考新欧冠“每档两队”的思路：8 轮对手来自四个强度层，每层两队，且强弱交错分布。
+  // 这样不会前四轮连续强敌，也不会后四轮全是弱队。
+  const pattern = [
+    [1, 0], [3, 0], [0, 0], [2, 0],
+    [1, 1], [3, 1], [0, 1], [2, 1]
+  ];
+  const slots = pattern.map(([potIdx, pickIdx]) => picked[potIdx]?.[pickIdx]).filter(Boolean);
   return slots.slice(0, 8).map((t, i) => ({
     round: i + 1,
     opponentId: t.id,
