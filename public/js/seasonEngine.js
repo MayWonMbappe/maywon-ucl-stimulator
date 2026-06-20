@@ -108,7 +108,14 @@ export function advanceRound(season) {
 export function finishLeagueIfNeeded(season) {
   if (season.stage !== 'league') return true;
   const userLeagueMatches = season.history.filter(m => m.stage === 'league').length;
-  if (season.round < season.maxLeagueRounds && userLeagueMatches < season.maxLeagueRounds) return false;
+
+  // The league phase must always allow the user to play all 8 fixtures.
+  // Previously, after Round 7 management advanced season.round to 8, this
+  // function completed the league phase too early because round === maxLeagueRounds.
+  // That blocked underdog teams such as Bodo/Glimt from playing Matchday 8
+  // even if their qualification status was already mathematically poor.
+  if (userLeagueMatches < season.maxLeagueRounds) return false;
+
   completeLeaguePhase(season);
   return true;
 }
