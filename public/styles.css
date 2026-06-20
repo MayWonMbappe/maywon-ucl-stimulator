@@ -184,3 +184,10 @@ select, input {
 .radar-hotspot:hover + .radar-label, .radar-point-group:hover .radar-label { fill: #ffe48a; font-weight: 800; }
 .radar-label { fill: rgba(255,255,255,.78); font-size: 10px; pointer-events: none; }
 .radar-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* History archive detail cards */
+.season-history-list .season-history-card { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.history-card-main { min-width: 0; }
+@media (max-width: 720px) {
+  .season-history-list .season-history-card { flex-direction: column; align-items: flex-start; }
+}

@@ -31,6 +31,7 @@ export function render() {
   if (page === 'standings') return renderStandings();
   if (page === 'knockout') return renderKnockout();
   if (page === 'history') return renderHistory();
+  if (page === 'season-detail') return renderSeasonDetail(arg);
   if (page === 'detail') return renderMatchDetail(arg);
   renderHome();
 }
@@ -415,9 +416,65 @@ function renderKnockout() {
 function renderHistory() {
   const archive = loadArchive();
   const current = state.season ? [state.season] : [];
-  const list = [...current, ...archive];
-  set(`<div class="section-title"><h2>历史记录</h2><button class="danger" id="clear-history">清空历史</button></div><div class="timeline">${list.map(s=>`<div class="timeline-item"><strong>${s.userTeamZhName || s.userTeamName}</strong><br><span class="meta">${s.completed ? '已结束' : '进行中'} · ${s.stage || '-'} · ${s.history?.length || 0}场记录</span></div>`).join('') || '<p class="meta">暂无历史。</p>'}</div>`);
+  const seen = new Set();
+  const list = [...current, ...archive].filter(s => {
+    if (!s?.id || seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
+  set(`<div class="section-title"><h2>历史记录</h2><button class="danger" id="clear-history">清空历史</button></div><div class="timeline season-history-list">${list.map(seasonHistoryCard).join('') || '<p class="meta">暂无历史。</p>'}</div>`);
   document.getElementById('clear-history').addEventListener('click', () => { if (confirm('确定清空历史和当前存档？')) { clearArchive(); resetState(); render(); } });
+}
+
+function seasonHistoryCard(s) {
+  const matches = s.history || [];
+  const gf = matches.reduce((sum, m) => sum + (m.score?.user || 0), 0);
+  const ga = matches.reduce((sum, m) => sum + (m.score?.opponent || 0), 0);
+  const wins = matches.filter(m => m.outcome === 'win').length;
+  const latest = matches.at(-1);
+  const status = s.completed ? '已结束' : '进行中';
+  const finish = seasonFinishText(s);
+  return `<div class="timeline-item season-history-card"><div class="history-card-main"><strong>${s.userTeamZhName || s.userTeamName || '未知球队'} · ${status}</strong><br><span class="meta">${finish} · ${matches.length} 场 · ${wins} 胜 · 进 ${gf} / 失 ${ga}</span>${latest ? `<br><span class="small">最近一场：${latest.userTeamName} ${latest.score.user}-${latest.score.opponent} ${latest.opponentName}</span>` : ''}</div><div class="actions"><button class="primary" data-go="/season-detail/${s.id}">打开赛季档案</button></div></div>`;
+}
+
+function findSeasonRecord(id) {
+  if (state.season?.id === id) return state.season;
+  return loadArchive().find(s => s.id === id) || null;
+}
+
+function renderSeasonDetail(id) {
+  const s = findSeasonRecord(id);
+  if (!s) return go('/history');
+  const team = getTeamById(s.userTeamId) || { zhName: s.userTeamZhName || s.userTeamName || '未知球队', name: s.userTeamName || '' };
+  const matches = s.history || [];
+  const gf = matches.reduce((sum, m) => sum + (m.score?.user || 0), 0);
+  const ga = matches.reduce((sum, m) => sum + (m.score?.opponent || 0), 0);
+  const xgf = matches.reduce((sum, m) => sum + (m.xg?.user || 0), 0);
+  const xga = matches.reduce((sum, m) => sum + (m.xg?.opponent || 0), 0);
+  const wins = matches.filter(m => m.outcome === 'win').length;
+  const draws = matches.filter(m => m.outcome === 'draw').length;
+  const losses = matches.filter(m => m.outcome === 'loss').length;
+  const goals = matches.flatMap(m => m.goals || []);
+  const cards = matches.flatMap(m => m.cards || []);
+  const injuries = matches.flatMap(m => m.injuries || []);
+  const finish = seasonFinishText(s);
+  const radar = seasonRadarCard(s);
+  const management = (s.managementHistory || []).length ? `<section class="card"><h3>轮间管理记录</h3><div class="timeline">${s.managementHistory.map((m, i)=>`<div class="timeline-item"><strong>第 ${i+1} 次管理：${(m.label || managementLabel(m.choice || m.type || m))}</strong><br><span class="meta">影响体能、锐度、战术熟练度和士气。</span></div>`).join('')}</div></section>` : '';
+  const bracket = s.knockout?.bracketLog?.length ? `<section class="card"><h3>淘汰赛路径</h3><div class="timeline">${s.knockout.bracketLog.map(x=>`<div class="timeline-item">${x}</div>`).join('')}</div></section>` : '';
+  set(`<section class="hero"><p class="eyebrow">Season Archive</p><h2>${team.zhName || team.name} · 赛季档案</h2><p>${finish}</p><div class="actions"><button data-go="/history">返回历史记录</button><button class="primary" data-go="/teams">重新开档</button></div></section><section class="card"><h3>赛季总览</h3><div class="kpi"><div><strong>${matches.length}</strong>总场次</div><div><strong>${wins}-${draws}-${losses}</strong>胜平负</div><div><strong>${gf}-${ga}</strong>总进失球</div><div><strong>${xgf.toFixed(2)}-${xga.toFixed(2)}</strong>总 xG</div><div><strong>${goals.length}</strong>进球事件</div><div><strong>${cards.length}</strong>纪律事件</div><div><strong>${injuries.length}</strong>伤退事件</div><div><strong>${s.leagueRank || '-'}</strong>联赛阶段排名</div></div></section>${radar}<section class="card"><h3>比赛记录</h3><p class="meta">点击任意比赛可查看单场关键抉择、进球、伤情和纪律细节。</p><div class="timeline">${matches.slice().reverse().map(matchSummaryCard).join('') || '<p class="meta">暂无比赛记录。</p>'}</div></section>${bracket}${management}`);
+}
+
+function managementLabel(type) {
+  const labels = { recovery:'恢复', tactical:'战术演练', attack:'进攻训练', defense:'防守训练', setpiece:'定位球专项', rotation:'轮换计划', mentality:'大赛心理准备', care:'重点球员护理' };
+  return labels[type] || type || '综合管理';
+}
+
+function seasonFinishText(s) {
+  if (s.finish === 'champion' || s.stage === 'champion') return '欧冠冠军，赛季圆满结束。';
+  if (s.finish === 'league_eliminated') return `联赛阶段第 ${s.leagueRank || '-'} 名出局。`;
+  if ((s.finish || '').includes('eliminated')) return `${stageName(String(s.finish).replace('_eliminated',''))}出局。`;
+  if (s.completed) return '赛季已结束。';
+  return `${stageName(s.stage || 'league')}进行中。`;
 }
 
 function renderMatchDetail(id) {
